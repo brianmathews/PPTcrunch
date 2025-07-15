@@ -2,6 +2,24 @@
 
 PPTcrunch is a .NET 8 console application that compresses videos embedded in PowerPoint (.pptx) files using FFmpeg while maintaining the original presentation structure and functionality.
 
+## Table of Contents
+
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration Options](#configuration-options)
+- [How It Works](#how-it-works)
+- [FFmpeg Command Details](#ffmpeg-command-details)
+- [Encoding Presets and Quality Reference](#encoding-presets-and-quality-reference)
+- [Output](#output)
+- [Error Handling](#error-handling)
+- [Supported Video Formats](#supported-video-formats)
+- [Requirements](#requirements)
+- [Troubleshooting](#troubleshooting)
+- [Architecture](#architecture)
+- [Technical Notes](#technical-notes)
+
 ## Features
 
 - **Interactive Configuration**: Prompts for video width, codec (H.264/H.265), and quality settings
@@ -24,13 +42,22 @@ PPTcrunch is a .NET 8 console application that compresses videos embedded in Pow
 
 ## Installation
 
-1. Clone or download this repository
-2. Build the project:
-   ```bash
-   dotnet build
-   ```
+1. **Download**: Get the latest `PPTcrunch.exe` from the releases page
+2. **Prerequisites**: Ensure FFmpeg is installed and available in your system PATH
+3. **Optional**: Install NVIDIA GPU drivers (version 416.34+ recommended for best quality)
+4. **Run**: Simply double-click `PPTcrunch.exe` or run from command line
 
-## Usage
+**No additional configuration files needed** - all settings are built into the executable and automatically optimized for your hardware.
+
+## Single-File Distribution
+
+This program is distributed as a **single self-contained executable** with no external dependencies:
+- ✅ **Single file**: Just `PPTcrunch.exe` - no configuration files or DLLs needed
+- ✅ **Auto-detection**: Automatically detects your NVIDIA driver version and chooses optimal encoding settings
+- ✅ **Hardware optimization**: Uses `vbr_hq` mode for newer drivers (416.34+) or `vbr` for older drivers
+- ✅ **Quality consistency**: CRF (CPU) and CQ (GPU) values are equivalent for consistent quality regardless of encoding method
+
+## How to Use
 
 ```bash
 dotnet run -- <pptx-file>
@@ -232,6 +259,101 @@ The program provides comprehensive progress information:
 - Clear status indicators (✓ for compressed, ⚠ for kept original, ✗ for failure)
 - Summary of total videos compressed vs. kept as original
 
+## Encoding Presets and Quality Reference
+
+### FFmpeg Preset Options
+
+The program uses different presets for CPU and GPU encoding that balance speed vs quality:
+
+#### CPU Presets (libx264/libx265)
+| Preset | Speed | Quality | Use Case |
+|--------|-------|---------|----------|
+| ultrafast | ⭐⭐⭐⭐⭐ | ⭐ | Real-time streaming, very fast encoding needed |
+| superfast | ⭐⭐⭐⭐ | ⭐⭐ | Fast encoding with minimal quality loss |
+| veryfast | ⭐⭐⭐ | ⭐⭐⭐ | Good balance for quick processing |
+| faster | ⭐⭐ | ⭐⭐⭐⭐ | Slightly slower but better quality |
+| **medium** | ⭐⭐⭐ | ⭐⭐⭐⭐ | **Default - good balance** |
+| slow | ⭐⭐ | ⭐⭐⭐⭐⭐ | Better quality, longer encoding time |
+| slower | ⭐ | ⭐⭐⭐⭐⭐ | High quality for archival purposes |
+| veryslow | ⭐ | ⭐⭐⭐⭐⭐ | Maximum quality, very slow |
+
+#### GPU Presets (NVENC)
+| Preset | NVENC Code | Speed | Quality | Use Case |
+|--------|------------|-------|---------|----------|
+| **slow** | p7 | ⭐⭐ | ⭐⭐⭐⭐⭐ | **Default - best quality** |
+| medium | p4 | ⭐⭐⭐ | ⭐⭐⭐⭐ | Good balance of speed/quality |
+| fast | p1 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | Maximum speed encoding |
+
+### Quality Settings Reference
+
+#### H.264 Quality Levels (CRF for CPU, CQ for GPU)
+
+| Value | Visual Quality | File Size | Human Perception | Recommended Use |
+|-------|----------------|-----------|------------------|-----------------|
+| **18** | Visually lossless | Very Large | Indistinguishable from original | Archival, master copies |
+| **20** | Excellent | Large | Virtually identical to source | High-end production |
+| **22** | Very High | Large | Minor differences only visible under scrutiny | Professional content |
+| **23** | High | Medium-Large | **Recommended default** - excellent quality | **General use** |
+| **25** | Good | Medium | Minor artifacts in complex scenes | Standard compression |
+| **27** | Acceptable | Medium-Small | Noticeable quality loss in detailed areas | Web streaming |
+| **29** | Fair | Small | Visible compression artifacts | Low bandwidth |
+| **32** | Poor | Very Small | Significant quality degradation | Emergency use only |
+
+#### H.265 Quality Levels (CRF for CPU, CQ for GPU)
+
+| Value | Visual Quality | File Size | Human Perception | Recommended Use |
+|-------|----------------|-----------|------------------|-----------------|
+| **22** | Visually lossless | Very Large | Indistinguishable from original | Archival, master copies |
+| **24** | Excellent | Large | Virtually identical to source | High-end production |
+| **26** | Very High | Large | Minor differences only visible under scrutiny | Professional content |
+| **28** | High | Medium-Large | **Recommended default** - excellent quality | **General use** |
+| **30** | Good | Medium | Minor artifacts in complex scenes | Standard compression |
+| **32** | Acceptable | Medium-Small | Noticeable quality loss in detailed areas | Web streaming |
+| **34** | Fair | Small | Visible compression artifacts | Low bandwidth |
+| **36** | Poor | Very Small | Significant quality degradation | Emergency use only |
+
+### Quality Level Mapping
+
+The program maps user-friendly quality levels (1-3) to specific codec values:
+
+| User Level | Description | H.264 Settings | H.265 Settings |
+|------------|-------------|----------------|----------------|
+| **1** | Smallest file with passable quality | CRF/CQ: 26 | CRF/CQ: 28 |
+| **2** | Balanced with good quality ⭐ | CRF/CQ: 22 | CRF/CQ: 26 |
+| **3** | Quality indistinguishable from source | CRF/CQ: 20 | CRF/CQ: 23 |
+
+*Note: CRF (CPU) and CQ (GPU) values are now equivalent for consistent quality regardless of encoding method.*
+
+### GPU Acceleration Benefits
+
+When using NVIDIA GPU acceleration with NVENC:
+
+- **Speed**: 5-10x faster encoding compared to CPU
+- **Constant Quality**: Uses `-b:v 0` for true constant quality without bitrate limitations
+- **Efficiency**: Frees up CPU for other tasks during encoding
+- **Quality**: Modern NVENC (Turing/Ampere) approaches software encoder quality
+
+### Advanced Configuration
+
+**Quality settings are automatically optimized** for your hardware and don't require manual configuration. The program uses these built-in settings:
+
+**Quality Level Mapping:**
+| User Level | Description | H.264 Settings | H.265 Settings |
+|------------|-------------|----------------|----------------|
+| **1** | Smallest file with passable quality | CRF/CQ: 26 | CRF/CQ: 28 |
+| **2** | Balanced with good quality ⭐ | CRF/CQ: 22 | CRF/CQ: 26 |
+| **3** | Quality indistinguishable from source | CRF/CQ: 20 | CRF/CQ: 23 |
+
+**Automatic Driver Detection:**
+- **NVIDIA Driver 416.34+**: Uses `vbr_hq` mode for better quality and bit allocation
+- **Older drivers**: Uses `vbr` mode for maximum compatibility
+- **No GPU/CPU only**: Uses standard CRF encoding
+
+**GPU Compatibility:**
+- **GTX 1060+, RTX series**: Full H.264 and H.265 hardware acceleration support
+- **Older GPUs**: H.264 acceleration only
+- **No NVIDIA GPU**: Falls back to optimized CPU encoding
+
 ## Technical Notes
 
 - The program extracts the entire PPTX structure for efficient batch processing
@@ -239,4 +361,5 @@ The program provides comprehensive progress information:
 - The final PPTX maintains full compatibility with PowerPoint and other Office applications
 - Processing preserves all PowerPoint-specific ZIP file characteristics
 - FFmpeg processes are properly managed with timeout and resource cleanup
-- Comprehensive error handling ensures partial failures don't corrupt the output 
+- Comprehensive error handling ensures partial failures don't corrupt the output
+- GPU encoding uses true constant quality mode (`-b:v 0`) for optimal quality-to-size ratios 

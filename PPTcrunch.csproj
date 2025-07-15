@@ -13,10 +13,14 @@
         <PublishTrimmed>true</PublishTrimmed>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
         <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+        <TrimMode>partial</TrimMode>
 
-        <!-- Optional: Reduce warnings for trimming -->
-        <TrimmerDefaultAction>link</TrimmerDefaultAction>
+        <!-- Optional: Performance optimizations -->
         <PublishReadyToRun>true</PublishReadyToRun>
     </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="System.IO.Compression.ZipFile" Version="4.3.0" />
+    </ItemGroup>
 
 </Project> 

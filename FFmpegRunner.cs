@@ -5,18 +5,22 @@ namespace PPTcrunch;
 
 public class FFmpegRunner
 {
-    private const int TimeoutMinutes = 30; // 30 minute timeout per video
+    private const int TimeoutMinutes = 60; // minutes timeout per video
 
     public static async Task<bool> CompressVideoAsync(string inputPath, string outputPath, UserSettings settings)
     {
-        // Try GPU acceleration first, fallback to CPU if it fails
-        bool gpuSuccess = await TryCompressWithGPU(inputPath, outputPath, settings);
-        if (gpuSuccess)
+        // Check if GPU acceleration is preferred and available
+        if (settings.UseGPUAcceleration)
         {
-            return true;
+            bool gpuSuccess = await TryCompressWithGPU(inputPath, outputPath, settings);
+            if (gpuSuccess)
+            {
+                return true;
+            }
+
+            Console.WriteLine("GPU compression failed, falling back to CPU compression...");
         }
 
-        Console.WriteLine("GPU compression failed or not available, falling back to CPU compression...");
         return await TryCompressWithCPU(inputPath, outputPath, settings);
     }
 
@@ -137,35 +141,58 @@ public class FFmpegRunner
         // Input file
         args.Append($"-i \"{inputPath}\" ");
 
-        // Video filters: scale down only if needed, maintain aspect ratio, ensure even dimensions
-        // First scale: only downscale if width exceeds max, maintain aspect ratio (-1 = auto height)
-        // Second scale: ensure BOTH width AND height are even (required by H.264/H.265 encoders)
-        // trunc(iw/2)*2 = force even width, trunc(ih/2)*2 = force even height
-        args.Append($"-vf \"scale='min({settings.MaxWidth},iw):-1',scale=trunc(iw/2)*2:trunc(ih/2)*2\" ");
+        // Video filters: improved single-step scaling that only downscales, never upscales
+        string scaleFilter = settings.MaxWidth == int.MaxValue
+            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
+        args.Append($"-vf \"{scaleFilter}\" ");
 
         // Video codec settings - NVIDIA NVENC
         args.Append($"-c:v {settings.GetGpuCodecName()} ");
 
-        // Simplified NVENC settings compatible with GTX 1660 SUPER
-        if (settings.Codec == VideoCodec.H265)
+        // Get quality settings from config
+        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
+        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
+
+        // Apply quality settings for true constant quality mode
+        if (!string.IsNullOrEmpty(encodingSettings.Rc))
         {
-            // H.265 NVENC settings optimized for GTX 1660 SUPER compatibility
-            args.Append($"-cq {settings.Quality} "); // User-specified quality level
-            args.Append("-preset slow "); // Slow preset for maximum quality
-            args.Append("-profile:v main "); // Use 8-bit main profile (GTX 1660 SUPER doesn't support 10-bit HEVC)
-            args.Append("-rc vbr "); // Variable bitrate for better quality allocation
-            args.Append("-bf 3 "); // B-frames for better compression
-            args.Append("-refs 3 "); // More reference frames for better quality
+            args.Append($"-rc {encodingSettings.Rc} ");
         }
-        else
+
+        if (encodingSettings.Cq.HasValue)
         {
-            // H.264 NVENC settings optimized for technical content
-            args.Append($"-cq {settings.Quality} "); // Use user-specified quality level
-            args.Append("-preset slow "); // Slow preset for maximum quality
-            args.Append("-profile:v high "); // High profile for better features
-            args.Append("-rc vbr "); // Variable bitrate
-            args.Append("-bf 3 "); // B-frames
-            args.Append("-refs 4 "); // More reference frames for better quality
+            args.Append($"-cq {encodingSettings.Cq.Value} ");
+        }
+
+        // Use -b:v 0 for true constant quality without bitrate limitations
+        args.Append("-b:v 0 ");
+
+        if (!string.IsNullOrEmpty(encodingSettings.Preset))
+        {
+            args.Append($"-preset {encodingSettings.Preset} ");
+        }
+
+        // Apply codec-specific parameters
+        if (!string.IsNullOrEmpty(codecParams.Profile))
+        {
+            args.Append($"-profile:v {codecParams.Profile} ");
+        }
+
+        if (codecParams.Bf.HasValue)
+        {
+            args.Append($"-bf {codecParams.Bf.Value} ");
+        }
+
+        if (codecParams.Refs.HasValue)
+        {
+            args.Append($"-refs {codecParams.Refs.Value} ");
+        }
+
+        // Add H.265 cross-platform compatibility tag
+        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+        {
+            args.Append($"-tag:v {codecParams.Tag} ");
         }
 
         // Audio settings (copy if exists, otherwise ignore)
@@ -192,15 +219,50 @@ public class FFmpegRunner
         args.Append($"-i \"{inputPath}\" ");
 
         // Video filters: scale down only if needed, maintain aspect ratio, ensure even dimensions
-        // First scale: only downscale if width exceeds max, maintain aspect ratio (-1 = auto height)
-        // Second scale: ensure BOTH width AND height are even (required by H.264/H.265 encoders)
-        // trunc(iw/2)*2 = force even width, trunc(ih/2)*2 = force even height
-        args.Append($"-vf \"scale='min({settings.MaxWidth},iw):-1',scale=trunc(iw/2)*2:trunc(ih/2)*2\" ");
+        string scaleFilter = settings.MaxWidth == int.MaxValue
+            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            : $"scale='min({settings.MaxWidth},iw):-1',scale=trunc(iw/2)*2:trunc(ih/2)*2";
+        args.Append($"-vf \"{scaleFilter}\" ");
 
         // Video codec settings
         args.Append($"-c:v {settings.GetCpuCodecName()} ");
-        args.Append($"-crf {settings.Quality} ");
-        args.Append("-preset medium "); // Use medium preset for balance of speed/quality
+
+        // Get quality settings from config
+        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, false);
+        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, false);
+
+        // Apply quality settings
+        if (encodingSettings.Crf.HasValue)
+        {
+            args.Append($"-crf {encodingSettings.Crf.Value} ");
+        }
+
+        if (!string.IsNullOrEmpty(encodingSettings.Preset))
+        {
+            args.Append($"-preset {encodingSettings.Preset} ");
+        }
+
+        // Apply codec-specific parameters
+        if (!string.IsNullOrEmpty(codecParams.Profile))
+        {
+            args.Append($"-profile:v {codecParams.Profile} ");
+        }
+
+        if (codecParams.Bf.HasValue)
+        {
+            args.Append($"-bf {codecParams.Bf.Value} ");
+        }
+
+        if (codecParams.Refs.HasValue)
+        {
+            args.Append($"-refs {codecParams.Refs.Value} ");
+        }
+
+        // Add H.265 cross-platform compatibility tag
+        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+        {
+            args.Append($"-tag:v {codecParams.Tag} ");
+        }
 
         // Audio settings (copy if exists, otherwise ignore)
         args.Append("-c:a copy ");

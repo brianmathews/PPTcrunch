@@ -16,6 +16,7 @@ public class GPUDetectionService
         public bool SupportsH265_10bit { get; set; }
         public int MaxReferenceFrames { get; set; } = 2;
         public string CompatibilityProfile { get; set; } = "Default";
+        public bool IsSupported { get; set; } // New field to indicate if GPU is supported for encoding
     }
 
     public static async Task<GPUInfo> DetectGPUCapabilitiesAsync()
@@ -38,11 +39,30 @@ public class GPUDetectionService
         gpuInfo.SupportsH264 = encoderInfo.HasH264;
         gpuInfo.SupportsH265 = encoderInfo.HasH265;
 
-        // Determine compatibility profile based on GPU model
+        // Use the comprehensive GPU capability detection from QualityConfigService
         if (gpuInfo.HasNvidiaGPU && !string.IsNullOrEmpty(gpuInfo.GPUModel))
         {
-            gpuInfo.CompatibilityProfile = DetermineCompatibilityProfile(gpuInfo.GPUModel);
-            SetCapabilitiesFromProfile(gpuInfo);
+            var capabilities = QualityConfigService.GetGPUCapabilities(gpuInfo.GPUModel);
+            if (capabilities != null)
+            {
+                gpuInfo.IsSupported = true;
+                gpuInfo.SupportsH265_10bit = capabilities.H265_10bit;
+                gpuInfo.MaxReferenceFrames = capabilities.MaxRefs;
+                gpuInfo.CompatibilityProfile = DetermineGenerationName(gpuInfo.GPUModel);
+
+                // Ensure codec support is at least what the capability system reports
+                // (FFmpeg detection might fail even if GPU supports it)
+                if (capabilities.SupportedCodecs.Contains("H264"))
+                    gpuInfo.SupportsH264 = true;
+                if (capabilities.SupportedCodecs.Contains("H265"))
+                    gpuInfo.SupportsH265 = true;
+            }
+            else
+            {
+                // GPU not supported by our encoding system (below GTX 1060)
+                gpuInfo.IsSupported = false;
+                gpuInfo.CompatibilityProfile = "Unsupported";
+            }
         }
 
         return gpuInfo;
@@ -152,74 +172,59 @@ public class GPUDetectionService
         return (false, false, false);
     }
 
-    private static string DetermineCompatibilityProfile(string gpuModel)
+    /// <summary>
+    /// Determines a human-readable generation name for the GPU based on its model
+    /// </summary>
+    private static string DetermineGenerationName(string gpuModel)
     {
-        string model = gpuModel.ToUpperInvariant();
+        string model = gpuModel.ToUpperInvariant().Replace(" ", "");
 
-        // RTX 30xx series
-        if (model.Contains("RTX 30") || model.Contains("RTX 31") || model.Contains("RTX 32") ||
-            model.Contains("RTX 33") || model.Contains("RTX 34") || model.Contains("RTX 35") ||
-            model.Contains("RTX 36") || model.Contains("RTX 37") || model.Contains("RTX 38") ||
-            model.Contains("RTX 39"))
+        // Extract model number using same logic as QualityConfigService
+        var patterns = new[]
         {
-            return "RTX_30xx";
+            @"GTX(\d{3,4})",           // GTX 1060, GTX 1660, etc.
+            @"RTX(\d{3,4})",           // RTX 2060, RTX 3070, RTX 4080, RTX 5090, etc.
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(model, pattern);
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int modelNumber))
+            {
+                int generation = modelNumber / 100;
+
+                return generation switch
+                {
+                    10 => $"GTX {modelNumber} (Pascal)",
+                    16 => $"GTX {modelNumber} (Turing)",
+                    20 => $"RTX {modelNumber} (Turing)",
+                    30 => $"RTX {modelNumber} (Ampere)",
+                    40 => $"RTX {modelNumber} (Ada Lovelace)",
+                    50 => $"RTX {modelNumber} (Blackwell)",
+                    >= 60 => $"RTX {modelNumber} (Future Gen)",
+                    _ => $"GPU {modelNumber} (Unknown Gen)"
+                };
+            }
         }
 
-        // RTX 20xx series
-        if (model.Contains("RTX 20") || model.Contains("RTX 21") || model.Contains("RTX 22") ||
-            model.Contains("RTX 23") || model.Contains("RTX 24") || model.Contains("RTX 25") ||
-            model.Contains("RTX 26") || model.Contains("RTX 27") || model.Contains("RTX 28") ||
-            model.Contains("RTX 29"))
+        // Handle special cases for Titan and professional cards
+        if (model.Contains("TITAN"))
         {
-            return "RTX_20xx";
+            if (model.Contains("RTX"))
+                return "Titan RTX (Turing)";
+            if (model.Contains("V"))
+                return "Titan V (Volta)";
+            if (model.Contains("X"))
+                return "Titan X (Pascal)";
+
+            return "Titan (Pascal+)";
         }
 
-        // GTX 1660 series
-        if (model.Contains("GTX 1660"))
-        {
-            return "GTX_1660";
-        }
+        // Professional cards
+        if (model.Contains("QUADRO") || model.Contains("RTX") && (model.Contains("A") || model.Contains("PRO")))
+            return "Professional (Workstation)";
 
-        // GTX 1060 series
-        if (model.Contains("GTX 1060"))
-        {
-            return "GTX_1060";
-        }
-
-        // GTX 1050, 1070, 1080 series (similar capabilities to 1060)
-        if (model.Contains("GTX 10"))
-        {
-            return "GTX_1060";
-        }
-
-        return "Default";
-    }
-
-    private static void SetCapabilitiesFromProfile(GPUInfo gpuInfo)
-    {
-        switch (gpuInfo.CompatibilityProfile)
-        {
-            case "RTX_30xx":
-                gpuInfo.SupportsH265_10bit = true;
-                gpuInfo.MaxReferenceFrames = 4;
-                break;
-            case "RTX_20xx":
-                gpuInfo.SupportsH265_10bit = true;
-                gpuInfo.MaxReferenceFrames = 4;
-                break;
-            case "GTX_1660":
-                gpuInfo.SupportsH265_10bit = false;
-                gpuInfo.MaxReferenceFrames = 3;
-                break;
-            case "GTX_1060":
-                gpuInfo.SupportsH265_10bit = false;
-                gpuInfo.MaxReferenceFrames = 3;
-                break;
-            default:
-                gpuInfo.SupportsH265_10bit = false;
-                gpuInfo.MaxReferenceFrames = 2;
-                break;
-        }
+        return "Unknown Generation";
     }
 
     public static async Task<bool> CheckFFprobeAvailabilityAsync()

@@ -173,6 +173,17 @@ public class FFmpegRunner
             args.Append($"-preset {encodingSettings.Preset} ");
         }
 
+        // Apply modern quality enhancement parameters
+        if (!string.IsNullOrEmpty(encodingSettings.Tune))
+        {
+            args.Append($"-tune {encodingSettings.Tune} ");
+        }
+
+        if (encodingSettings.Multipass.HasValue)
+        {
+            args.Append($"-multipass {encodingSettings.Multipass.Value} ");
+        }
+
         // Apply codec-specific parameters
         if (!string.IsNullOrEmpty(codecParams.Profile))
         {

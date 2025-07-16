@@ -22,15 +22,17 @@ public class QualityConfigService
 
     private static QualityConfig CreateHardcodedConfig()
     {
-        // Check NVIDIA driver capabilities once
+        // Check NVIDIA driver capabilities once for advanced features
         if (!_driverVersionChecked)
         {
             _supportsVbrHq = CheckNvidiaDriverSupportsVbrHq();
             _driverVersionChecked = true;
         }
 
-        // Choose the appropriate rate control mode based on driver capabilities
-        string rcMode = _supportsVbrHq ? "vbr_hq" : "vbr";
+        // Use modern vbr rate control with tune and multipass for advanced features
+        string rcMode = "vbr";
+        string tuneMode = _supportsVbrHq ? "hq" : "";
+        int? multipassValue = _supportsVbrHq ? 2 : null;
 
         return new QualityConfig
         {
@@ -42,12 +44,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 26, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 25, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 28, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 28, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 },
                 ["2"] = new QualityLevel
@@ -56,12 +58,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 22, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 22, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 22, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 24, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 },
                 ["3"] = new QualityLevel
@@ -70,12 +72,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 20, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 20, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 20, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 22, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 23, Preset = "slow", Rc = rcMode }
+                        GPU = new EncodingSettings { Cq = 23, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 }
             },
@@ -90,39 +92,6 @@ public class QualityConfigService
                 {
                     GPU = new CodecParams { Profile = "main", Bf = 3, Refs = 3, Tag = "hvc1" },
                     CPU = new CodecParams { Profile = "main", Tag = "hvc1" }
-                }
-            },
-            GPUCompatibility = new Dictionary<string, GPUInfo>
-            {
-                ["GTX_1060"] = new GPUInfo
-                {
-                    SupportedCodecs = new[] { "H264", "H265" },
-                    H265_10bit = false,
-                    MaxRefs = 3
-                },
-                ["GTX_1660"] = new GPUInfo
-                {
-                    SupportedCodecs = new[] { "H264", "H265" },
-                    H265_10bit = false,
-                    MaxRefs = 3
-                },
-                ["RTX_20xx"] = new GPUInfo
-                {
-                    SupportedCodecs = new[] { "H264", "H265" },
-                    H265_10bit = true,
-                    MaxRefs = 4
-                },
-                ["RTX_30xx"] = new GPUInfo
-                {
-                    SupportedCodecs = new[] { "H264", "H265" },
-                    H265_10bit = true,
-                    MaxRefs = 4
-                },
-                ["Default"] = new GPUInfo
-                {
-                    SupportedCodecs = new[] { "H264" },
-                    H265_10bit = false,
-                    MaxRefs = 2
                 }
             }
         };
@@ -161,11 +130,11 @@ public class QualityConfigService
                         int major = int.Parse(match.Groups[1].Value);
                         int minor = int.Parse(match.Groups[2].Value);
 
-                        // vbr_hq was introduced in driver version 416.34
-                        bool supportsVbrHq = major > 416 || (major == 416 && minor >= 34);
+                        // Advanced quality features (tune hq, multipass) introduced in driver version 416.34
+                        bool supportsAdvancedFeatures = major > 416 || (major == 416 && minor >= 34);
 
-                        Console.WriteLine($"  Driver supports vbr_hq: {(supportsVbrHq ? "Yes" : "No")} (using {(supportsVbrHq ? "vbr_hq" : "vbr")} mode)");
-                        return supportsVbrHq;
+                        Console.WriteLine($"  Driver supports advanced quality features: {(supportsAdvancedFeatures ? "Yes" : "No")} (using {(supportsAdvancedFeatures ? "vbr with tune hq and multipass" : "vbr")} mode)");
+                        return supportsAdvancedFeatures;
                     }
                 }
             }
@@ -175,9 +144,89 @@ public class QualityConfigService
             Console.WriteLine($"  Could not check NVIDIA driver version: {ex.Message}");
         }
 
-        // Default to basic vbr mode for compatibility
+        // Default to basic vbr mode for compatibility  
         Console.WriteLine("  Using standard vbr mode for maximum compatibility");
         return false;
+    }
+
+    /// <summary>
+    /// Determines GPU capabilities based on GPU name/model using simplified generation detection
+    /// </summary>
+    /// <param name="gpuName">The GPU name as reported by the system</param>
+    /// <returns>GPUInfo with capabilities, or null if GPU is not supported</returns>
+    public static GPUInfo? GetGPUCapabilities(string gpuName)
+    {
+        if (string.IsNullOrWhiteSpace(gpuName))
+            return null;
+
+        string normalizedName = gpuName.ToUpperInvariant().Replace(" ", "");
+
+        // Check if this is a supported NVIDIA GPU and extract model number
+        int? modelNumber = ExtractNvidiaModelNumber(normalizedName);
+        if (!modelNumber.HasValue)
+            return null;
+
+        // Check if model meets minimum requirements (GTX 1060 or higher)
+        if (modelNumber.Value < 1060)
+            return null;
+
+        // Extract generation number (10 for 10xx, 20 for 20xx, etc.)
+        int generation = modelNumber.Value / 100;
+
+        return new GPUInfo
+        {
+            // All supported GPUs have H264 and H265 support
+            SupportedCodecs = new[] { "H264", "H265" },
+
+            // H265 10-bit support introduced with generation 10 (GTX 10xx/Pascal)
+            H265_10bit = generation >= 10,
+
+            // MaxRefs: 3 for generation 10-15, 4 for generation 16+ (Turing and later)
+            MaxRefs = generation >= 16 ? 4 : 3
+        };
+    }
+
+    /// <summary>
+    /// Extracts the model number from NVIDIA GPU names (e.g., "GTX 1060" → 1060, "RTX 4080" → 4080)
+    /// </summary>
+    private static int? ExtractNvidiaModelNumber(string gpuName)
+    {
+        // Look for NVIDIA GPU patterns and extract model numbers
+        var patterns = new[]
+        {
+            @"GTX(\d{3,4})",           // GTX 1060, GTX 1660, etc.
+            @"RTX(\d{3,4})",           // RTX 2060, RTX 3070, RTX 4080, RTX 5090, etc.
+            @"TITAN.*?(\d{3,4})",      // Future Titan models with numbers
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(gpuName, pattern);
+            if (match.Success && int.TryParse(match.Groups[1].Value, out int modelNumber))
+            {
+                return modelNumber;
+            }
+        }
+
+        // Handle special cases for Titan series without model numbers
+        if (gpuName.Contains("TITAN"))
+        {
+            // Treat Titan cards as high-end models
+            if (gpuName.Contains("RTX"))
+                return 2080; // Titan RTX ~ RTX 2080 generation
+            if (gpuName.Contains("V"))
+                return 1080; // Titan V ~ GTX 1080 generation  
+            if (gpuName.Contains("X"))
+                return 1080; // Titan X ~ GTX 1080 generation
+        }
+
+        // Handle professional cards - treat as high-end current generation
+        if (gpuName.Contains("QUADRORTX") || gpuName.Contains("RTXA") || gpuName.Contains("RTXPRO"))
+        {
+            return 3080; // Treat professional cards as RTX 3080 equivalent
+        }
+
+        return null; // Not a supported NVIDIA GPU
     }
 
     public static EncodingSettings GetEncodingSettings(int qualityLevel, VideoCodec codec, bool useGPU)
@@ -206,11 +255,12 @@ public class QualityConfigService
     }
 }
 
+
+
 public class QualityConfig
 {
     public Dictionary<string, QualityLevel> QualityLevels { get; set; } = new();
     public CodecSettingsConfig CodecSettings { get; set; } = new();
-    public Dictionary<string, GPUInfo> GPUCompatibility { get; set; } = new();
 }
 
 public class QualityLevel
@@ -232,6 +282,8 @@ public class EncodingSettings
     public int? Cq { get; set; }
     public string Preset { get; set; } = string.Empty;
     public string Rc { get; set; } = string.Empty;
+    public string Tune { get; set; } = string.Empty;
+    public int? Multipass { get; set; }
 }
 
 public class CodecSettingsConfig

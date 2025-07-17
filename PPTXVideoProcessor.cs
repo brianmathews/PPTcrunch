@@ -8,13 +8,13 @@ public class PPTXVideoProcessor
         Console.WriteLine("=".PadRight(50, '='));
 
         // Check FFmpeg availability first
-        if (!await FFmpegRunner.CheckFFmpegAvailabilityAsync())
+        if (!await EmbeddedFFmpegRunner.CheckFFmpegAvailabilityAsync())
         {
-            throw new InvalidOperationException("FFmpeg is not available. Please ensure FFmpeg is installed and accessible from the command line.");
+            throw new InvalidOperationException("Embedded FFmpeg is not available. This should not happen with the embedded version.");
         }
 
         // Check NVENC availability for GPU acceleration
-        bool nvencAvailable = await FFmpegRunner.CheckNVENCAvailabilityAsync();
+        bool nvencAvailable = await EmbeddedFFmpegRunner.CheckNVENCAvailabilityAsync();
         if (!nvencAvailable)
         {
             Console.WriteLine("GPU acceleration will not be used - falling back to CPU-only compression");
@@ -106,7 +106,7 @@ public class PPTXVideoProcessor
 
             try
             {
-                bool success = await FFmpegRunner.CompressVideoAsync(video.TempOrigPath, outputPath, settings);
+                bool success = await EmbeddedFFmpegRunner.CompressVideoAsync(video.TempOrigPath, outputPath, settings);
                 if (success && File.Exists(outputPath))
                 {
                     long compressedSize = new FileInfo(outputPath).Length;

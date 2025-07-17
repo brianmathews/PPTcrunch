@@ -99,52 +99,11 @@ public class QualityConfigService
 
     private static bool CheckNvidiaDriverSupportsVbrHq()
     {
-        try
-        {
-            // Try to get NVIDIA driver version using nvidia-smi
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=driver_version --format=csv,noheader,nounits",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
+        // For embedded FFmpeg distribution, we'll use conservative settings
+        // to ensure maximum compatibility across different systems
+        // Most modern systems with NVENC support will have recent enough drivers
+        // but we'll default to basic vbr mode for reliability
 
-            using var process = Process.Start(startInfo);
-            if (process != null)
-            {
-                string output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-
-                if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
-                {
-                    string version = output.Trim();
-                    Console.WriteLine($"  NVIDIA driver version: {version}");
-
-                    // Parse version number (e.g., "472.12" -> 472.12)
-                    var match = Regex.Match(version, @"(\d+)\.(\d+)");
-                    if (match.Success)
-                    {
-                        int major = int.Parse(match.Groups[1].Value);
-                        int minor = int.Parse(match.Groups[2].Value);
-
-                        // Advanced quality features (tune hq, multipass) introduced in driver version 416.34
-                        bool supportsAdvancedFeatures = major > 416 || (major == 416 && minor >= 34);
-
-                        Console.WriteLine($"  Driver supports advanced quality features: {(supportsAdvancedFeatures ? "Yes" : "No")} (using {(supportsAdvancedFeatures ? "vbr with tune hq and multipass" : "vbr")} mode)");
-                        return supportsAdvancedFeatures;
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"  Could not check NVIDIA driver version: {ex.Message}");
-        }
-
-        // Default to basic vbr mode for compatibility  
         Console.WriteLine("  Using standard vbr mode for maximum compatibility");
         return false;
     }

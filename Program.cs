@@ -59,31 +59,17 @@ class Program
     {
         var result = new SystemCheckResult();
 
-        // Check FFmpeg availability
-        Console.WriteLine("Checking FFmpeg availability...");
-        bool ffmpegAvailable = await FFmpegRunner.CheckFFmpegAvailabilityAsync();
+        // Check embedded FFmpeg availability
+        Console.WriteLine("Initializing embedded FFmpeg...");
+        bool ffmpegAvailable = await EmbeddedFFmpegRunner.CheckFFmpegAvailabilityAsync();
         if (ffmpegAvailable)
         {
-            Console.WriteLine("  ✓ FFmpeg is available");
+            Console.WriteLine("  ✓ Embedded FFmpeg is available");
         }
         else
         {
-            Console.WriteLine("  ✗ FFmpeg is not available or not in PATH");
-            Console.WriteLine("    Please install FFmpeg and ensure it's accessible from the command line.");
-            result.CanProceed = false;
-        }
-
-        // Check FFprobe availability
-        Console.WriteLine("Checking FFprobe availability...");
-        bool ffprobeAvailable = await GPUDetectionService.CheckFFprobeAvailabilityAsync();
-        if (ffprobeAvailable)
-        {
-            Console.WriteLine("  ✓ FFprobe is available");
-        }
-        else
-        {
-            Console.WriteLine("  ✗ FFprobe is not available or not in PATH");
-            Console.WriteLine("    Please install FFprobe (usually comes with FFmpeg).");
+            Console.WriteLine("  ✗ Failed to initialize embedded FFmpeg");
+            Console.WriteLine("    This should not happen with the embedded version.");
             result.CanProceed = false;
         }
 
@@ -92,38 +78,21 @@ class Program
             return result;
         }
 
-        // Detect GPU capabilities
-        Console.WriteLine("Detecting GPU capabilities...");
-        result.GPUInfo = await GPUDetectionService.DetectGPUCapabilitiesAsync();
+        // Check NVENC availability using embedded FFmpeg
+        bool nvencAvailable = await EmbeddedFFmpegRunner.CheckNVENCAvailabilityAsync();
 
-        if (result.GPUInfo.HasNvidiaGPU)
+        // Create basic GPU info for compatibility
+        result.GPUInfo = new GPUDetectionService.GPUInfo
         {
-            Console.WriteLine($"  ✓ NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
-            Console.WriteLine($"    Driver version: {result.GPUInfo.DriverVersion}");
-            Console.WriteLine($"    Compatibility profile: {result.GPUInfo.CompatibilityProfile}");
-        }
-        else
-        {
-            Console.WriteLine("  ⚠ No NVIDIA GPU detected");
-        }
+            SupportsNVENC = nvencAvailable,
+            SupportsH264 = nvencAvailable,  // If NVENC is available, H.264 is typically supported
+            SupportsH265 = nvencAvailable,  // Modern NVENC supports H.265
+            HasNvidiaGPU = nvencAvailable,  // If NVENC works, there's likely an NVIDIA GPU
+            GPUModel = nvencAvailable ? "NVIDIA GPU (detected via NVENC)" : "Not detected",
+            CompatibilityProfile = nvencAvailable ? "NVENC Compatible" : "CPU Only"
+        };
 
-        if (result.GPUInfo.SupportsNVENC)
-        {
-            Console.WriteLine("  ✓ NVENC hardware acceleration available");
-            if (result.GPUInfo.SupportsH264)
-            {
-                Console.WriteLine("    ✓ H.264 NVENC supported");
-            }
-            if (result.GPUInfo.SupportsH265)
-            {
-                Console.WriteLine("    ✓ H.265 NVENC supported");
-                if (!result.GPUInfo.SupportsH265_10bit)
-                {
-                    Console.WriteLine("      Note: 10-bit H.265 not supported on this GPU");
-                }
-            }
-        }
-        else
+        if (!nvencAvailable)
         {
             Console.WriteLine("  ⚠ GPU acceleration not available - will use CPU encoding");
         }

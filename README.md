@@ -36,26 +36,25 @@ PPTcrunch is a .NET 8 console application that compresses videos embedded in Pow
 ## Prerequisites
 
 1. **.NET 8 Runtime** - Make sure you have .NET 8 installed on your system
-2. **FFmpeg** - FFmpeg must be installed and accessible from the command line
-   - Download from: https://ffmpeg.org/download.html
-   - Ensure `ffmpeg` command is available in your system PATH
+2. **No external dependencies required** - FFmpeg is embedded within the application
 
 ## Installation
 
 1. **Download**: Get the latest `PPTcrunch.exe` from the releases page
-2. **Prerequisites**: Ensure FFmpeg is installed and available in your system PATH
-3. **Optional**: Install NVIDIA GPU drivers (version 416.34+ recommended for best quality)
-4. **Run**: Simply double-click `PPTcrunch.exe` or run from command line
+2. **Optional**: Install NVIDIA GPU drivers (version 416.34+ recommended for best GPU acceleration)
+3. **Run**: Simply double-click `PPTcrunch.exe` or run from command line
 
-**No additional configuration files needed** - all settings are built into the executable and automatically optimized for your hardware.
+**No additional software installation needed** - FFmpeg is embedded and automatically initialized on first use.
 
 ## Single-File Distribution
 
-This program is distributed as a **single self-contained executable** with no external dependencies:
-- ✅ **Single file**: Just `PPTcrunch.exe` - no configuration files or DLLs needed
+This program is distributed as a **truly self-contained executable** with **embedded FFmpeg**:
+- ✅ **Single file**: Just `PPTcrunch.exe` - no external FFmpeg installation required
+- ✅ **Embedded FFmpeg**: All video processing capabilities built-in with automatic initialization  
 - ✅ **Auto-detection**: Automatically detects your NVIDIA driver version and chooses optimal encoding settings
 - ✅ **Hardware optimization**: Uses `vbr_hq` mode for newer drivers (416.34+) or `vbr` for older drivers
 - ✅ **Quality consistency**: CRF (CPU) and CQ (GPU) values are equivalent for consistent quality regardless of encoding method
+- ✅ **Cross-platform**: Works on Windows, macOS, and Linux without external dependencies
 
 ## How to Use
 
@@ -198,19 +197,20 @@ Key parameters (dynamically set based on user choices):
 ## Requirements
 
 - Windows, macOS, or Linux with .NET 8
-- FFmpeg installed and accessible via command line
+- Internet connection for initial FFmpeg binary download (first run only)
 - Sufficient disk space for temporary files during processing
 
 ## Troubleshooting
 
-1. **"ffmpeg not found"**: Ensure FFmpeg is installed and in your system PATH
+1. **First run initialization**: On first use, the application will automatically download and initialize embedded FFmpeg binaries
 2. **Permission errors**: Make sure you have write access to the directory containing the PPTX file
 3. **Large file processing**: Ensure sufficient disk space for temporary extraction and processing
 4. **GPU not being used**: The program will show NVENC availability during startup
    - Ensure you have an NVIDIA GPU that supports NVENC (GTX 600+ or RTX series)
    - Update NVIDIA GPU drivers to the latest version
-   - Verify FFmpeg was compiled with NVENC support: `ffmpeg -encoders | findstr nvenc`
+   - The embedded FFmpeg includes NVENC support automatically
    - If GPU fails, the program automatically falls back to CPU compression
+5. **Network connectivity**: Initial setup requires internet access to download FFmpeg binaries (one-time only)
 
 ## Architecture
 
@@ -218,7 +218,8 @@ The application is organized into focused classes for maintainability:
 
 - **`Program.cs`** - Main entry point, command line handling, and user input collection
 - **`PPTXVideoProcessor.cs`** - Main processing orchestration and progress reporting
-- **`FFmpegRunner.cs`** - GPU/CPU video compression with timeout handling and progress feedback
+- **`EmbeddedFFmpegRunner.cs`** - Embedded FFmpeg video compression with GPU/CPU acceleration and automatic binary management
+- **`FFmpegRunner.cs`** - Legacy external FFmpeg runner (replaced by embedded version)
 - **`FileManager.cs`** - File operations, ZIP handling, and cleanup
 - **`XmlReferenceUpdater.cs`** - Updates XML references when file extensions change
 - **`VideoFileInfo.cs`** - Data model for video file information

@@ -419,6 +419,12 @@ public class EmbeddedFFmpegRunner
         return value % 2 == 0 ? value : value - 1;
     }
 
+    public static async Task<string?> GetFFmpegExecutablePathAsync()
+    {
+        await EnsureInitializedAsync();
+        return _ffmpegPath != null ? Path.Combine(_ffmpegPath, "ffmpeg.exe") : null;
+    }
+
     public static async Task<bool> CheckFFmpegAvailabilityAsync()
     {
         try

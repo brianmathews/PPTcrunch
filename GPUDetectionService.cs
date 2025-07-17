@@ -139,9 +139,17 @@ public class GPUDetectionService
     {
         try
         {
+            // Get the embedded FFmpeg path
+            string? ffmpegPath = await EmbeddedFFmpegRunner.GetFFmpegExecutablePathAsync();
+            if (string.IsNullOrEmpty(ffmpegPath) || !File.Exists(ffmpegPath))
+            {
+                // Fallback to external ffmpeg if embedded is not available
+                ffmpegPath = "ffmpeg";
+            }
+
             var startInfo = new ProcessStartInfo
             {
-                FileName = "ffmpeg",
+                FileName = ffmpegPath,
                 Arguments = "-hide_banner -encoders",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,

@@ -8,27 +8,59 @@ class Program
     {
         if (args.Length != 1)
         {
-            Console.WriteLine("Usage: PPTcrunch <pptx-file>");
-            Console.WriteLine("Example: PPTcrunch presentation.pptx");
-            return 1;
-        }
-
-        string pptxPath = args[0];
-
-        if (!File.Exists(pptxPath))
-        {
-            Console.WriteLine($"Error: File '{pptxPath}' not found.");
-            return 1;
-        }
-
-        if (!Path.GetExtension(pptxPath).Equals(".pptx", StringComparison.OrdinalIgnoreCase))
-        {
-            Console.WriteLine("Error: File must have .pptx extension.");
+            ShowUsage();
             return 1;
         }
 
         try
         {
+            // Expand wildcards and get list of files to process
+            var filesToProcess = ExpandFilePattern(args[0]);
+
+            if (filesToProcess.Count == 0)
+            {
+                Console.WriteLine($"Error: No files found matching pattern '{args[0]}'");
+                return 1;
+            }
+
+            // Categorize files by type
+            var pptxFiles = new List<string>();
+            var videoFiles = new List<string>();
+            var unsupportedFiles = new List<string>();
+
+            foreach (string file in filesToProcess)
+            {
+                string extension = Path.GetExtension(file).ToLowerInvariant();
+                if (extension == ".pptx")
+                {
+                    pptxFiles.Add(file);
+                }
+                else if (IsVideoFile(extension))
+                {
+                    videoFiles.Add(file);
+                }
+                else
+                {
+                    unsupportedFiles.Add(file);
+                }
+            }
+
+            // Report what we found
+            Console.WriteLine($"Found {filesToProcess.Count} file(s) to process:");
+            if (pptxFiles.Count > 0)
+                Console.WriteLine($"  - {pptxFiles.Count} PowerPoint file(s)");
+            if (videoFiles.Count > 0)
+                Console.WriteLine($"  - {videoFiles.Count} video file(s)");
+            if (unsupportedFiles.Count > 0)
+                Console.WriteLine($"  - {unsupportedFiles.Count} unsupported file(s) (will be skipped)");
+            Console.WriteLine();
+
+            if (pptxFiles.Count == 0 && videoFiles.Count == 0)
+            {
+                Console.WriteLine("Error: No supported files found. Supported formats: .pptx, .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v");
+                return 1;
+            }
+
             // Perform system checks
             Console.WriteLine("Checking system requirements...");
             Console.WriteLine("=".PadRight(50, '='));
@@ -42,10 +74,79 @@ class Program
             // Collect user settings
             var settings = await CollectUserSettingsAsync(systemCheckResult);
 
-            var processor = new PPTXVideoProcessor();
-            await processor.ProcessAsync(pptxPath, settings);
-            Console.WriteLine("Video compression completed successfully!");
-            return 0;
+            // Process files
+            int successCount = 0;
+            int totalFiles = pptxFiles.Count + videoFiles.Count;
+
+            // Process PPTX files
+            if (pptxFiles.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Processing PowerPoint files:");
+                Console.WriteLine("=".PadRight(50, '='));
+
+                var pptxProcessor = new PPTXVideoProcessor();
+                foreach (string pptxFile in pptxFiles)
+                {
+                    try
+                    {
+                        await pptxProcessor.ProcessAsync(pptxFile, settings);
+                        Console.WriteLine($"✓ Successfully processed: {Path.GetFileName(pptxFile)}");
+                        successCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"✗ Failed to process {Path.GetFileName(pptxFile)}: {ex.Message}");
+                    }
+                    Console.WriteLine();
+                }
+            }
+
+            // Process video files
+            if (videoFiles.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Processing video files:");
+                Console.WriteLine("=".PadRight(50, '='));
+
+                var videoProcessor = new VideoProcessor();
+                foreach (string videoFile in videoFiles)
+                {
+                    try
+                    {
+                        bool success = await videoProcessor.ProcessVideoFileAsync(videoFile, settings);
+                        if (success)
+                        {
+                            Console.WriteLine($"✓ Successfully processed: {Path.GetFileName(videoFile)}");
+                            successCount++;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"✗ Failed to process: {Path.GetFileName(videoFile)}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"✗ Failed to process {Path.GetFileName(videoFile)}: {ex.Message}");
+                    }
+                    Console.WriteLine();
+                }
+            }
+
+            // Summary
+            Console.WriteLine("=".PadRight(50, '='));
+            Console.WriteLine($"Processing complete: {successCount}/{totalFiles} files processed successfully");
+
+            if (unsupportedFiles.Count > 0)
+            {
+                Console.WriteLine($"Skipped {unsupportedFiles.Count} unsupported file(s):");
+                foreach (string file in unsupportedFiles)
+                {
+                    Console.WriteLine($"  - {Path.GetFileName(file)}");
+                }
+            }
+
+            return successCount > 0 ? 0 : 1;
         }
         catch (Exception ex)
         {
@@ -78,21 +179,43 @@ class Program
             return result;
         }
 
-        // Check NVENC availability using embedded FFmpeg
-        bool nvencAvailable = await EmbeddedFFmpegRunner.CheckNVENCAvailabilityAsync();
+        // Use GPUDetectionService for comprehensive GPU detection
+        Console.WriteLine("Detecting GPU capabilities...");
+        result.GPUInfo = await GPUDetectionService.DetectGPUCapabilitiesAsync();
 
-        // Create basic GPU info for compatibility
-        result.GPUInfo = new GPUDetectionService.GPUInfo
+        if (result.GPUInfo.HasNvidiaGPU)
         {
-            SupportsNVENC = nvencAvailable,
-            SupportsH264 = nvencAvailable,  // If NVENC is available, H.264 is typically supported
-            SupportsH265 = nvencAvailable,  // Modern NVENC supports H.265
-            HasNvidiaGPU = nvencAvailable,  // If NVENC works, there's likely an NVIDIA GPU
-            GPUModel = nvencAvailable ? "NVIDIA GPU (detected via NVENC)" : "Not detected",
-            CompatibilityProfile = nvencAvailable ? "NVENC Compatible" : "CPU Only"
-        };
+            Console.WriteLine($"  ✓ NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
+            if (!string.IsNullOrEmpty(result.GPUInfo.DriverVersion))
+            {
+                Console.WriteLine($"    Driver version: {result.GPUInfo.DriverVersion}");
+            }
+            Console.WriteLine($"    Generation: {result.GPUInfo.CompatibilityProfile}");
 
-        if (!nvencAvailable)
+            if (result.GPUInfo.SupportsNVENC)
+            {
+                Console.WriteLine("    ✓ NVENC hardware acceleration available");
+                if (result.GPUInfo.SupportsH264)
+                    Console.WriteLine("      ✓ H.264 encoding supported");
+                if (result.GPUInfo.SupportsH265)
+                    Console.WriteLine("      ✓ H.265 encoding supported");
+            }
+            else
+            {
+                Console.WriteLine("    ⚠ NVENC not available (GPU too old or driver issue)");
+            }
+        }
+        else
+        {
+            Console.WriteLine("  ⚠ No NVIDIA GPU detected");
+            Console.WriteLine("    This could be due to:");
+            Console.WriteLine("    - No NVIDIA GPU present");
+            Console.WriteLine("    - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
+            Console.WriteLine("    - Outdated GPU drivers");
+            Console.WriteLine("    - nvidia-smi not available");
+        }
+
+        if (!result.GPUInfo.SupportsNVENC)
         {
             Console.WriteLine("  ⚠ GPU acceleration not available - will use CPU encoding");
         }
@@ -221,6 +344,84 @@ class Program
         Console.WriteLine();
 
         return Task.FromResult(settings);
+    }
+
+    private static void ShowUsage()
+    {
+        Console.WriteLine("PPTcrunch - PowerPoint Video Compressor");
+        Console.WriteLine("=========================================");
+        Console.WriteLine();
+        Console.WriteLine("Usage: PPTcrunch <file-pattern>");
+        Console.WriteLine();
+        Console.WriteLine("Supported file types:");
+        Console.WriteLine("  - PowerPoint presentations: *.pptx");
+        Console.WriteLine("  - Video files: *.mp4, *.mov, *.avi, *.mkv, *.webm, *.wmv, *.flv, *.m4v");
+        Console.WriteLine();
+        Console.WriteLine("Examples:");
+        Console.WriteLine("  PPTcrunch presentation.pptx          # Process single PowerPoint file");
+        Console.WriteLine("  PPTcrunch video.mp4                  # Process single video file");
+        Console.WriteLine("  PPTcrunch *.pptx                     # Process all PowerPoint files");
+        Console.WriteLine("  PPTcrunch *.mov                      # Process all .mov video files");
+        Console.WriteLine("  PPTcrunch *.*                        # Process all supported files");
+        Console.WriteLine();
+        Console.WriteLine("Output:");
+        Console.WriteLine("  - PPTX files: Creates new file with '-shrunk' suffix");
+        Console.WriteLine("  - Video files: Creates new file with quality and codec suffix");
+        Console.WriteLine("    Example: video.mov → video - Q22H264.mp4");
+    }
+
+    private static List<string> ExpandFilePattern(string pattern)
+    {
+        var files = new List<string>();
+
+        try
+        {
+            // Check if pattern contains wildcards
+            if (pattern.Contains('*') || pattern.Contains('?'))
+            {
+                // Get directory and search pattern
+                string directory = Path.GetDirectoryName(pattern) ?? "";
+                string searchPattern = Path.GetFileName(pattern);
+
+                // If no directory specified, use current directory
+                if (string.IsNullOrEmpty(directory))
+                {
+                    directory = Directory.GetCurrentDirectory();
+                }
+
+                // Expand wildcards
+                if (Directory.Exists(directory))
+                {
+                    var matchingFiles = Directory.GetFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
+                    files.AddRange(matchingFiles);
+                }
+            }
+            else
+            {
+                // No wildcards - single file
+                if (File.Exists(pattern))
+                {
+                    files.Add(Path.GetFullPath(pattern));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error expanding file pattern '{pattern}': {ex.Message}");
+        }
+
+        return files;
+    }
+
+    private static bool IsVideoFile(string extension)
+    {
+        string[] videoExtensions = {
+            ".mp4", ".mpeg4", ".mov", ".avi", ".mkv",
+            ".webm", ".wmv", ".flv", ".m4v", ".mpg",
+            ".mpeg", ".3gp", ".3g2", ".asf", ".ogv"
+        };
+
+        return videoExtensions.Contains(extension.ToLowerInvariant());
     }
 
     private class SystemCheckResult

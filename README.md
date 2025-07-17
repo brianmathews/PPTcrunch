@@ -1,6 +1,6 @@
-# PPTcrunch - PowerPoint Video Compressor
+# PPTcrunch - PowerPoint & Video Compressor
 
-PPTcrunch is a .NET 8 console application that compresses videos embedded in PowerPoint (.pptx) files using FFmpeg while maintaining the original presentation structure and functionality.
+PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg with GPU acceleration. It supports both PowerPoint (.pptx) files with embedded videos AND individual video files, with wildcard support for batch processing.
 
 ## Table of Contents
 
@@ -22,12 +22,15 @@ PPTcrunch is a .NET 8 console application that compresses videos embedded in Pow
 
 ## Features
 
+- **Dual File Support**: Process both PowerPoint (.pptx) files AND individual video files
+- **Wildcard Processing**: Support for wildcards to batch process multiple files (e.g., `*.mov`, `*.pptx`)
 - **Interactive Configuration**: Prompts for video width, codec (H.264/H.265), and quality settings
 - **GPU Acceleration**: Uses NVIDIA GPU (NVENC) for fast video compression with CPU fallback
 - **Smart Compression**: Only keeps compressed videos if they're actually smaller than originals
 - **Flexible Settings**: Customizable video resolution, codec choice, and quality levels
-- **Automatic Format Detection**: Supports .mp4, .mpeg4, .mov video formats
-- **Intelligent XML Updates**: Only updates references for files that actually changed
+- **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v and more
+- **Intelligent Naming**: Video files get descriptive suffixes with quality and codec info
+- **Intelligent XML Updates**: Only updates references for files that actually changed (PPTX processing)
 - **Progress Feedback**: Real-time compression progress and detailed results
 - **Robust Error Handling**: Gracefully handles compression failures and GPU unavailability
 - **File Size Optimization**: Maintains original files when compression doesn't reduce size
@@ -59,19 +62,28 @@ This program is distributed as a **truly self-contained executable** with **embe
 ## How to Use
 
 ```bash
-dotnet run -- <pptx-file>
+dotnet run -- <file-pattern>
 ```
 
 or after building:
 
 ```bash
-PPTcrunch.exe <pptx-file>
+PPTcrunch.exe <file-pattern>
 ```
 
-### Example
+### Examples
 
+**Process PowerPoint files:**
 ```bash
-dotnet run -- "presentation.pptx"
+dotnet run -- "presentation.pptx"          # Single PowerPoint file
+dotnet run -- "*.pptx"                     # All PowerPoint files in current directory
+```
+
+**Process video files:**
+```bash
+dotnet run -- "video.mp4"                  # Single video file
+dotnet run -- "*.mov"                      # All .mov files in current directory
+dotnet run -- "*.*"                        # All supported files (PPTX and video)
 ```
 
 The program will prompt you for compression settings:
@@ -96,10 +108,21 @@ Selected settings:
   Quality level: 25
 ```
 
-Then it will:
+**For PowerPoint files (.pptx)**, the program will:
 1. Create a backup copy of the original file
 2. Extract and compress all videos found in the presentation using your settings
 3. Generate a new file named `presentation-shrunk.pptx`
+
+**For video files**, the program will:
+1. Compress the video file using your selected settings
+2. Generate a new file with quality and codec information in the filename
+3. Example: `video.mov` → `video - Q22H264.mp4` (Quality 22, H.264 codec)
+4. Original file remains unchanged
+
+**For wildcard patterns**, the program will:
+1. Find all matching files in the current directory
+2. Process each supported file type appropriately
+3. Show a summary of processed files
 
 ## Configuration Options
 
@@ -191,8 +214,14 @@ Key parameters (dynamically set based on user choices):
 
 ## Supported Video Formats
 
-- **Input**: .mp4, .mpeg4, .mov
+- **Input**: .mp4, .mpeg4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv
 - **Output**: All videos are converted to .mp4 format for consistency and smaller file sizes
+
+### File Processing Modes
+
+1. **PPTX Mode**: Extracts videos from PowerPoint, compresses them, and repackages into a new PPTX file with `-shrunk` suffix
+2. **Video Mode**: Directly compresses individual video files with quality and codec information in filename (e.g., `video - Q22H264.mp4`)
+3. **Batch Mode**: Process multiple files using wildcards (e.g., `*.mov`, `*.pptx`, `*.*`)
 
 ## Requirements
 

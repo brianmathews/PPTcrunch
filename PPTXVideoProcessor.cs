@@ -7,20 +7,6 @@ public class PPTXVideoProcessor
         Console.WriteLine($"Processing: {pptxPath}");
         Console.WriteLine("=".PadRight(50, '='));
 
-        // Check FFmpeg availability first
-        if (!await EmbeddedFFmpegRunner.CheckFFmpegAvailabilityAsync())
-        {
-            throw new InvalidOperationException("Embedded FFmpeg is not available. This should not happen with the embedded version.");
-        }
-
-        // Check NVENC availability for GPU acceleration
-        bool nvencAvailable = await EmbeddedFFmpegRunner.CheckNVENCAvailabilityAsync();
-        if (!nvencAvailable)
-        {
-            Console.WriteLine("GPU acceleration will not be used - falling back to CPU-only compression");
-        }
-        Console.WriteLine();
-
         string outputPath = FileManager.GetOutputPath(pptxPath);
 
         // Create backup and working directories

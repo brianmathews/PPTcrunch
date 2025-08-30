@@ -75,8 +75,49 @@ public class PPTXVideoProcessor
         for (int i = 0; i < videoFiles.Count; i++)
         {
             var video = videoFiles[i];
+
+            // Check if video has already been recompressed
+            if (VideoProcessor.IsAlreadyRecompressed(video.OriginalFileName))
+            {
+                Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Skipping: {video.OriginalFileName}");
+                Console.WriteLine($"⚠ Video appears to have already been recompressed");
+                Console.WriteLine("  Skipping to avoid double compression.");
+                Console.WriteLine();
+
+                // Create a result that indicates we kept the original (already compressed) file
+                var skipResult = new VideoCompressionResult
+                {
+                    OriginalFileName = video.OriginalFileName,
+                    OriginalSize = new FileInfo(video.TempOrigPath).Length,
+                    FinalFileName = video.OriginalFileName,
+                    WasCompressed = false,
+                    FileSizeReduced = false,
+                    FinalSize = new FileInfo(video.TempOrigPath).Length,
+                    CompressionMethod = "Already Recompressed",
+                    Reason = "Video already has recompressed filename pattern"
+                };
+
+                // Copy the original file to temp directory since we're keeping it
+                string originalFinalPath = Path.Combine(tempDir, video.OriginalFileName);
+                File.Copy(video.TempOrigPath, originalFinalPath, true);
+
+                results.Add(skipResult);
+                Console.WriteLine("-".PadRight(50, '-'));
+                continue;
+            }
+
             string nameWithoutExt = Path.GetFileNameWithoutExtension(video.OriginalFileName);
-            string outputFileName = $"{nameWithoutExt}.mp4";
+
+            // Generate filename with quality/codec suffix for PowerPoint videos (no spaces)
+            // Get actual quality value for filename
+            var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
+            int qualityValue = settings.UseGPUAcceleration ? (encodingSettings.Cq ?? 25) : (encodingSettings.Crf ?? 25);
+
+            // Generate codec string
+            string codecString = settings.Codec == VideoCodec.H264 ? "H264" : "H265";
+
+            // Generate filename with pattern: "originalname-Q{quality}{codec}.mp4" (no spaces for PowerPoint)
+            string outputFileName = $"{nameWithoutExt}-Q{qualityValue}{codecString}.mp4";
             string outputPath = Path.Combine(tempDir, outputFileName);
 
             Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Compressing: {video.OriginalFileName} -> {outputFileName}");

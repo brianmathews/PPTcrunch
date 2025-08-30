@@ -425,6 +425,12 @@ public class EmbeddedFFmpegRunner
         return _ffmpegPath != null ? Path.Combine(_ffmpegPath, "ffmpeg.exe") : null;
     }
 
+    public static async Task<string?> GetFFmpegDirectoryAsync()
+    {
+        await EnsureInitializedAsync();
+        return _ffmpegPath;
+    }
+
     public static async Task<bool> CheckFFmpegAvailabilityAsync()
     {
         try
@@ -485,9 +491,32 @@ public class EmbeddedFFmpegRunner
             }
             finally
             {
-                // Cleanup test files
-                try { File.Delete(tempInput); } catch { }
-                try { File.Delete(tempOutput); } catch { }
+                // Cleanup test files with better error handling
+                try
+                {
+                    if (File.Exists(tempInput))
+                    {
+                        File.Delete(tempInput);
+                        Console.WriteLine("  ✓ Cleaned up temporary test input file");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠ Could not delete temporary test input file: {ex.Message}");
+                }
+
+                try
+                {
+                    if (File.Exists(tempOutput))
+                    {
+                        File.Delete(tempOutput);
+                        Console.WriteLine("  ✓ Cleaned up temporary test output file");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  ⚠ Could not delete temporary test output file: {ex.Message}");
+                }
             }
         }
         catch (Exception ex)

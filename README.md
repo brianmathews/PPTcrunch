@@ -211,6 +211,8 @@ Key parameters (dynamically set based on user choices):
 - If video compression fails, the original video is retained
 - XML reference updates are handled gracefully with warnings for any issues
 - All temporary directories are cleaned up even if errors occur
+- **Temporary Files**: The program creates and cleans up temporary directories (`PPT-temp` and `PPTX-working`) during processing
+- **FFmpeg Directory**: FFmpeg binaries are stored at `C:\ffmpeg` and are **intentionally preserved** between runs for performance (to avoid re-downloading)
 
 ## Supported Video Formats
 
@@ -240,6 +242,11 @@ Key parameters (dynamically set based on user choices):
    - The embedded FFmpeg includes NVENC support automatically
    - If GPU fails, the program automatically falls back to CPU compression
 5. **Network connectivity**: Initial setup requires internet access to download FFmpeg binaries (one-time only)
+6. **Temporary directories not cleaned up**: If you see `PPT-temp` or `PPTX-working` directories left behind:
+   - This usually happens when file handles are still open during cleanup
+   - The program will show warnings and provide the full paths for manual deletion
+   - Try closing any applications that might have the files open
+   - The `C:\ffmpeg` directory is intentionally preserved for performance
 
 ## Architecture
 

@@ -2,6 +2,23 @@ namespace PPTcrunch;
 
 public class VideoProcessor
 {
+    /// <summary>
+    /// Checks if a video filename indicates it has already been recompressed.
+    /// Detects patterns like " - Q22H264.mp4" (standalone) or "-Q26H265.mp4" (PowerPoint).
+    /// </summary>
+    /// <param name="filename">The filename to check</param>
+    /// <returns>True if the filename indicates the video has already been recompressed</returns>
+    public static bool IsAlreadyRecompressed(string filename)
+    {
+        if (string.IsNullOrEmpty(filename))
+            return false;
+
+        // Pattern: optional space + dash + optional space + Q + numbers + H + numbers + .mp4 at end
+        // Matches: " - Q22H264.mp4", "-Q26H265.mp4", etc.
+        var pattern = @"( )?-( )?Q\d+H\d+\.mp4$";
+        return System.Text.RegularExpressions.Regex.IsMatch(filename, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
     public async Task<bool> ProcessVideoFileAsync(string videoPath, UserSettings settings)
     {
         Console.WriteLine($"Processing video: {videoPath}");
@@ -11,6 +28,15 @@ public class VideoProcessor
         {
             Console.WriteLine($"Error: Video file '{videoPath}' not found.");
             return false;
+        }
+
+        // Check if video has already been recompressed
+        string filename = Path.GetFileName(videoPath);
+        if (IsAlreadyRecompressed(filename))
+        {
+            Console.WriteLine($"⚠ Video appears to have already been recompressed (filename: {filename})");
+            Console.WriteLine("  Skipping to avoid double compression.");
+            return true; // Return true as this is not an error condition
         }
 
         // Check if file is a supported video format

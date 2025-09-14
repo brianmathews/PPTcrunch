@@ -90,3 +90,6 @@ PPTX-working/
 *.user
 *.userosscache
 *.sln.docstates 
+
+# Captured videos
+*.mkv

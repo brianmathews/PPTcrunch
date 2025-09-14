@@ -7,7 +7,8 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Usage](#usage)
+- [How to Use](#how-to-use)
+- [Capture Mode](#capture-mode)
 - [Configuration Options](#configuration-options)
 - [How It Works](#how-it-works)
 - [FFmpeg Command Details](#ffmpeg-command-details)
@@ -28,13 +29,14 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 - **GPU Acceleration**: Uses NVIDIA GPU (NVENC) for fast video compression with CPU fallback
 - **Smart Compression**: Only keeps compressed videos if they're actually smaller than originals
 - **Flexible Settings**: Customizable video resolution, codec choice, and quality levels
-- **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v and more
+- **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv and more
 - **Intelligent Naming**: Video files get descriptive suffixes with quality and codec info
 - **Intelligent XML Updates**: Only updates references for files that actually changed (PPTX processing)
 - **Progress Feedback**: Real-time compression progress and detailed results
 - **Robust Error Handling**: Gracefully handles compression failures and GPU unavailability
 - **File Size Optimization**: Maintains original files when compression doesn't reduce size
 - **Backup Preservation**: Keeps original PPTX file unchanged as backup
+- **Direct-to-Disk Capture**: Record from USB HDMI capture devices to disk with no transcoding (MJPEG copy) or lossless FFV1 for uncompressed input
 
 ## Prerequisites
 
@@ -48,11 +50,13 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 
 1. **Clone or download** the source code
 2. **Build the executable** using the provided build script:
-   ```
-   publish.bat
-   ```
-3. **Add to PATH** (recommended): Copy `publish\PPTcrunch.exe` to a directory in your system PATH
-4. **Alternative**: Place `PPTcrunch.exe` in any directory and run with full path
+
+```batch
+publish.bat
+```
+
+- **Add to PATH** (recommended): Copy `publish\PPTcrunch.exe` to a directory in your system PATH
+- **Alternative**: Place `PPTcrunch.exe` in any directory and run with full path
 
 ### Using the Executable
 
@@ -78,7 +82,7 @@ Option A — Use File Explorer and Settings:
 
 Option B — Use PowerShell (current user):
 
-```
+```powershell
 $dir = 'C:\Tools'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 Copy-Item -Force 'publish\PPTcrunch.exe' $dir
@@ -90,6 +94,7 @@ After this, you can run `PPTcrunch` from any directory.
 ## Distribution
 
 This program is distributed as a **self-contained executable** with **automatic FFmpeg management**:
+
 - ✅ **Single file**: Just `PPTcrunch.exe` - no external FFmpeg installation required
 - ✅ **Automatic FFmpeg**: Downloads and manages FFmpeg binaries automatically on first use
 - ✅ **Persistent storage**: FFmpeg binaries stored in `C:\ffmpeg` for reuse across sessions
@@ -102,28 +107,42 @@ This program is distributed as a **self-contained executable** with **automatic 
 
 After building with `publish.bat`, use the executable:
 
-```
+```bash
 PPTcrunch.exe <file-pattern>
+```
+
+Or start interactive USB capture (Windows DirectShow):
+
+```bash
+PPTcrunch.exe capture
 ```
 
 ### Examples
 
 **Process PowerPoint files:**
-```
+
+```bash
 PPTcrunch.exe "presentation.pptx"          # Single PowerPoint file
 PPTcrunch.exe "*.pptx"                     # All PowerPoint files in current directory
 ```
 
 **Process video files:**
-```
+
+```bash
 PPTcrunch.exe "video.mp4"                  # Single video file
 PPTcrunch.exe "*.mov"                      # All .mov files in current directory
 PPTcrunch.exe "*.*"                        # All supported files (PPTX and video)
 ```
 
+**Record from a USB HDMI capture device:**
+
+```bash
+PPTcrunch.exe capture
+```
+
 The program will prompt you for compression settings:
 
-```
+```text
 Video Compression Settings
 ==========================
 
@@ -149,18 +168,56 @@ Selected settings:
   Maximum width: 1920 pixels
 ```
 
+## Capture Mode
+
+The capture mode records video directly from a USB HDMI capture device to disk, without transcoding when possible.
+
+Workflow:
+
+1. Device selection
+   - Enumerates DirectShow video devices via FFmpeg
+   - Default selection prefers a device named "USB Video" if present
+2. Frame rate selection
+   - Detects supported frame rates from the device's advertised ranges
+   - Prompts with discrete options (e.g., 60, 50, 30, 25, 20, 15, 10, 5)
+   - Default: 30 fps if available
+3. Resolution selection
+   - Lists only resolutions compatible with the chosen frame rate
+   - Shows available compression formats for each resolution (e.g., "1920x1080 (YUV422, MJPEG)")
+   - Default: 1920x1080 if available at the chosen frame rate
+4. Compression format selection
+   - If multiple formats are available for the chosen resolution and frame rate, prompts user to select
+   - Automatically uses the only available format if there's just one option
+   - Default: MJPEG if available, otherwise the first available format
+   - Common formats: MJPEG (compressed), YUV422 (uncompressed), RGB24, etc.
+5. Output filename
+   - Suggested: `yyyy-MM-dd_HH-mm-ss_WxH@FPS.mkv`
+   - Container: `.mkv`
+
+Recording details:
+
+- MJPEG input: video is copied without re-encoding using `-c:v copy -fps_mode passthrough`
+- Uncompressed input (e.g., yuyv422): recorded losslessly with FFV1 using `-pix_fmt yuv422p -c:v ffv1 -level 3 -g 1`
+- Press 'q' in the FFmpeg console to stop recording cleanly
+- Files are written to the current working directory
+
+Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (downloaded automatically on first run).
+
 **For PowerPoint files (.pptx)**, the program will:
+
 1. Create a backup copy of the original file
 2. Extract and compress all videos found in the presentation using your settings
 3. Generate a new file named `presentation-shrunk.pptx`
 
 **For video files**, the program will:
+
 1. Compress the video file using your selected settings
 2. Generate a new file with quality and codec information in the filename
 3. Example: `video.mov` → `video - Q22H264.mp4` (Quality 22, H.264 codec)
 4. Original file remains unchanged
 
 **For wildcard patterns**, the program will:
+
 1. Find all matching files in the current directory
 2. Process each supported file type appropriately
 3. Show a summary of processed files
@@ -168,32 +225,35 @@ Selected settings:
 ## Configuration Options
 
 ### Video Width
+
 - **Default**: 1920 pixels
 - **Purpose**: Maximum width for video scaling (maintains aspect ratio)
-- **Behavior**: 
+- **Behavior**:
   - Videos **wider** than this setting will be downscaled to this width
   - Videos **smaller** than this setting will remain their original size (no upscaling)
   - Aspect ratio is always preserved
   - **Both width AND height are forced to even numbers** (required by H.264/H.265 encoders)
-- **Examples**: 
+- **Examples**:
   - Set to `1280`: A 1920x1080 video becomes 1280x720, but a 640x480 video stays 640x480
   - Set to `1920`: A 1921x1080 video becomes 1920x1078 (height adjusted to even number)
   - Set to `3840`: Allows up to 4K resolution without downscaling
 
 ### Video Codec
+
 - **Option 1**: H.264 (libx264 CPU / h264_nvenc GPU)
   - Better compatibility with older devices
   - Standard compression efficiency
   - Recommended for general use
-- **Option 2**: H.265 (libx265 CPU / hevc_nvenc GPU)  
+- **Option 2**: H.265 (libx265 CPU / hevc_nvenc GPU)
   - Better compression (smaller files)
   - Newer standard, requires modern hardware for playback
   - Recommended for newer devices and better compression ratios
 
 ### Quality Level
+
 - **Range**: 18-35 (lower = better quality, larger files)
 - **18-22**: Very high quality (near lossless)
-- **23-28**: High quality (recommended range) 
+- **23-28**: High quality (recommended range)
 - **29-35**: Medium quality (smaller files)
 - **Default**: 23 (good balance of quality and file size)
 
@@ -211,6 +271,7 @@ Selected settings:
 The program tries GPU acceleration first, then falls back to CPU if needed:
 
 **GPU Command Examples:**
+
 ```bash
 # H.264 with user settings (example scale=1280:720, quality level → CQ 22)
 ffmpeg -i "input-orig.mov" -vf "scale=1280:720" -c:v h264_nvenc -cq 22 -b:v 0 -preset slow -profile:v high -rc vbr -c:a copy -y -stats "output.mp4"
@@ -220,6 +281,7 @@ ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v hevc_nvenc -cq 26 -b:v 0 -
 ```
 
 **CPU Command Examples:**
+
 ```bash
 # H.264 with user settings (example scale=1280:720, quality level → CRF 22)
 ffmpeg -i "input-orig.mov" -vf "scale=1280:720" -c:v libx264 -crf 22 -preset medium -c:a copy -y -stats "output.mp4"
@@ -229,6 +291,7 @@ ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v libx265 -crf 24 -preset me
 ```
 
 Key parameters (dynamically set based on user choices):
+
 - **GPU**: `-c:v h264_nvenc` or `-c:v hevc_nvenc` (H.264/H.265 NVENC encoders)
 - **GPU**: `-cq` (constant quality) with `-b:v 0` and `-rc vbr` (true CQ mode)
 - **GPU**: `-preset slow` and appropriate `-profile:v` per codec
@@ -254,7 +317,7 @@ Key parameters (dynamically set based on user choices):
 
 ## Supported Video Formats
 
-- **Direct video mode (input)**: .mp4, .mpeg4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v
+- **Direct video mode (input)**: .mp4, .mpeg4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv
 - **PPTX-embedded videos**: Common media types found in `ppt/media` are processed as extracted files
 - **Output**: All videos are converted to .mp4 format for consistency and smaller file sizes
 
@@ -277,16 +340,16 @@ Key parameters (dynamically set based on user choices):
 2. **Permission errors**: Make sure you have write access to the directory containing the PPTX file
 3. **Large file processing**: Ensure sufficient disk space for temporary extraction and processing
 4. **GPU not being used**: The program will show NVENC availability during startup
-   - Ensure you have an NVIDIA GPU that supports NVENC (GTX 600+ or RTX series)
-   - Update NVIDIA GPU drivers to the latest version
-   - The downloaded FFmpeg includes NVENC support automatically
-   - If GPU fails, the program automatically falls back to CPU compression
+   1. Ensure you have an NVIDIA GPU that supports NVENC (GTX 600+ or RTX series)
+   2. Update NVIDIA GPU drivers to the latest version
+   3. The downloaded FFmpeg includes NVENC support automatically
+   4. If GPU fails, the program automatically falls back to CPU compression
 5. **Network connectivity**: Initial setup requires internet access to download FFmpeg binaries (one-time only)
 6. **Temporary directories not cleaned up**: If you see `PPT-temp` or `PPTX-working` directories left behind:
-   - This usually happens when file handles are still open during cleanup
-   - The program will show warnings and provide the full paths for manual deletion
-   - Try closing any applications that might have the files open
-   - The `C:\ffmpeg` directory is intentionally preserved for performance
+   1. This usually happens when file handles are still open during cleanup
+   2. The program will show warnings and provide the full paths for manual deletion
+   3. Try closing any applications that might have the files open
+   4. The `C:\ffmpeg` directory is intentionally preserved for performance
 
 ## Architecture
 
@@ -318,7 +381,7 @@ The program includes several improvements for reliability and performance:
 The program uses intelligent decision-making for optimal results:
 
 1. **GPU First**: Attempts NVIDIA GPU acceleration for faster compression
-2. **CPU Fallback**: Falls back to CPU encoding if GPU fails or is unavailable  
+2. **CPU Fallback**: Falls back to CPU encoding if GPU fails or is unavailable
 3. **Size Comparison**: Compares compressed file size to original after encoding
 4. **Best Choice**: Keeps whichever file is smaller (compressed or original)
 5. **XML Preservation**: Only updates XML references for files that actually changed extensions
@@ -341,6 +404,7 @@ The program provides comprehensive progress information:
 The program uses different presets for CPU and GPU encoding that balance speed vs quality:
 
 #### CPU Presets (libx264/libx265)
+
 | Preset | Speed | Quality | Use Case |
 |--------|-------|---------|----------|
 | ultrafast | ⭐⭐⭐⭐⭐ | ⭐ | Real-time streaming, very fast encoding needed |
@@ -353,6 +417,7 @@ The program uses different presets for CPU and GPU encoding that balance speed v
 | veryslow | ⭐ | ⭐⭐⭐⭐⭐ | Maximum quality, very slow |
 
 #### GPU Presets (NVENC)
+
 | Preset | NVENC Code | Speed | Quality | Use Case |
 |--------|------------|-------|---------|----------|
 | **slow** | p7 | ⭐⭐ | ⭐⭐⭐⭐⭐ | **Default - best quality** |
@@ -413,6 +478,7 @@ When using NVIDIA GPU acceleration with NVENC:
 **Quality settings are automatically optimized** for your hardware and don't require manual configuration. The program uses these built-in settings:
 
 **Quality Level Mapping:**
+
 | User Level | Description | H.264 Settings | H.265 Settings |
 |------------|-------------|----------------|----------------|
 | **1** | Smallest file with passable quality | CRF/CQ: 26 | CRF/CQ: 28 |
@@ -420,10 +486,12 @@ When using NVIDIA GPU acceleration with NVENC:
 | **3** | Quality indistinguishable from source | CRF/CQ: 20 | CRF/CQ: 23 |
 
 **Automatic Driver Detection:**
+
 - NVENC capability is detected automatically. Current builds use standard `vbr` rate control with constant quality (`-b:v 0`).
 - If NVENC is unavailable, CPU encoding with CRF is used.
 
 **GPU Compatibility:**
+
 - **GTX 1060+, RTX series**: Full H.264 and H.265 hardware acceleration support
 - **Older GPUs**: H.264 acceleration only
 - **No NVIDIA GPU**: Falls back to optimized CPU encoding
@@ -436,4 +504,4 @@ When using NVIDIA GPU acceleration with NVENC:
 - Processing preserves all PowerPoint-specific ZIP file characteristics
 - FFmpeg processes are properly managed with timeout and resource cleanup
 - Comprehensive error handling ensures partial failures don't corrupt the output
-- GPU encoding uses true constant quality mode (`-b:v 0`) for optimal quality-to-size ratios 
+- GPU encoding uses true constant quality mode (`-b:v 0`) for optimal quality-to-size ratios

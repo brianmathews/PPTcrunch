@@ -23,74 +23,27 @@ public class EmbeddedFFmpegRunner
         {
             Console.WriteLine("Initializing embedded FFmpeg...");
 
-            // Use a dedicated FFmpeg directory to avoid cluttering user directories
-            string ffmpegBaseDir = @"C:\ffmpeg";
-
-            // Create the directory if it doesn't exist
+            string ffmpegBaseDir = GetDefaultFFmpegBaseDirectory();
             Directory.CreateDirectory(ffmpegBaseDir);
 
-            // Check common locations where FFmpeg might be downloaded
-            string[] possibleDirectories = {
-                ffmpegBaseDir,  // Dedicated FFmpeg directory
-                AppContext.BaseDirectory,  // Fallback: directly in app directory
-                Path.Combine(AppContext.BaseDirectory, "FFmpeg"),  // Fallback: in FFmpeg subdirectory
-                Path.Combine(AppContext.BaseDirectory, "ffmpeg")   // Fallback: in lowercase ffmpeg subdirectory
-            };
+            string? ffmpegDirectory = FindExistingFFmpegDirectory(ffmpegBaseDir, searchAllSubdirectories: true);
 
-            string? ffmpegExePath = null;
-            string? ffmpegDirectory = null;
-
-            // Check if FFmpeg already exists in any of the possible locations
-            foreach (string dir in possibleDirectories)
-            {
-                string ffmpegPath = Path.Combine(dir, "ffmpeg.exe");
-                string ffprobePath = Path.Combine(dir, "ffprobe.exe");
-                Console.WriteLine($"Checking for FFmpeg at: {ffmpegPath}");
-                if (File.Exists(ffmpegPath) && File.Exists(ffprobePath))
-                {
-                    ffmpegExePath = ffmpegPath;
-                    ffmpegDirectory = dir;
-                    Console.WriteLine($"Found FFmpeg at: {ffmpegExePath}");
-                    break;
-                }
-            }
-
-            // If not found, download FFmpeg
-            if (ffmpegExePath == null)
+            if (ffmpegDirectory == null)
             {
                 Console.WriteLine($"Downloading FFmpeg binaries to {ffmpegBaseDir}...");
 
-                // Set the FFmpeg executables path before downloading so it downloads to our desired location
                 FFmpeg.SetExecutablesPath(ffmpegBaseDir);
-
-                // Download the latest FFmpeg binaries
                 await FFmpegDownloader.GetLatestVersion(FFmpegVersion.Official, ffmpegBaseDir);
                 Console.WriteLine("FFmpeg binaries downloaded successfully");
 
-                // Check again for the downloaded binaries
-                Console.WriteLine($"Searching for downloaded FFmpeg binaries in directories...");
-                foreach (string dir in possibleDirectories)
+                ffmpegDirectory = FindExistingFFmpegDirectory(ffmpegBaseDir, searchAllSubdirectories: true);
+                if (ffmpegDirectory == null)
                 {
-                    string ffmpegPath = Path.Combine(dir, "ffmpeg.exe");
-                    string ffprobePath = Path.Combine(dir, "ffprobe.exe");
-                    Console.WriteLine($"Checking for FFmpeg at: {ffmpegPath}");
-                    if (File.Exists(ffmpegPath) && File.Exists(ffprobePath))
-                    {
-                        ffmpegExePath = ffmpegPath;
-                        ffmpegDirectory = dir;
-                        Console.WriteLine($"Found FFmpeg at: {ffmpegExePath}");
-                        break;
-                    }
-                }
-
-                if (ffmpegExePath == null)
-                {
-                    // List all files in the FFmpeg directory to help debug
                     Console.WriteLine($"Files in FFmpeg directory ({ffmpegBaseDir}):");
                     try
                     {
                         var files = Directory.GetFiles(ffmpegBaseDir, "*", SearchOption.AllDirectories);
-                        foreach (var file in files.Take(20)) // Show first 20 files
+                        foreach (var file in files.Take(20))
                         {
                             Console.WriteLine($"  {file}");
                         }
@@ -104,13 +57,10 @@ public class EmbeddedFFmpegRunner
                 }
             }
 
-            // Set the executable path for Xabe.FFmpeg
             FFmpeg.SetExecutablesPath(ffmpegDirectory);
             _ffmpegPath = ffmpegDirectory;
 
-            // Verify FFmpeg is working by trying to get media info from a test
             Console.WriteLine("FFmpeg binaries initialized successfully");
-
             Console.WriteLine("✓ Embedded FFmpeg initialized successfully");
             _initialized = true;
         }
@@ -118,6 +68,126 @@ public class EmbeddedFFmpegRunner
         {
             Console.WriteLine($"Failed to initialize embedded FFmpeg: {ex.Message}");
             throw;
+        }
+    }
+
+    public static string GetPreferredFFmpegDirectory() => GetDefaultFFmpegBaseDirectory();
+
+    private static string GetDefaultFFmpegBaseDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return @"C:\ffmpeg";
+        }
+
+        string basePath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+        if (string.IsNullOrWhiteSpace(basePath))
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (string.IsNullOrWhiteSpace(home))
+            {
+                home = Path.GetTempPath();
+            }
+
+            if (OperatingSystem.IsMacOS())
+            {
+                basePath = Path.Combine(home, "Library", "Application Support");
+            }
+            else
+            {
+                basePath = Path.Combine(home, ".local", "share");
+            }
+        }
+
+        return Path.Combine(basePath, "PPTcrunch", "ffmpeg");
+    }
+
+    private static string GetFFmpegExecutableName() => OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg";
+
+    private static string GetFFprobeExecutableName() => OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe";
+
+    private static IEnumerable<string> GetCandidateDirectories(string ffmpegBaseDir)
+    {
+        var directories = new List<string?>
+        {
+            ffmpegBaseDir,
+            Path.Combine(ffmpegBaseDir, "bin"),
+            AppContext.BaseDirectory,
+            Path.Combine(AppContext.BaseDirectory, "FFmpeg"),
+            Path.Combine(AppContext.BaseDirectory, "ffmpeg")
+        };
+
+        return directories
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(path!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string? FindExistingFFmpegDirectory(string ffmpegBaseDir, bool searchAllSubdirectories = false)
+    {
+        string ffmpegExecutable = GetFFmpegExecutableName();
+        string ffprobeExecutable = GetFFprobeExecutableName();
+
+        var candidateDirectories = GetCandidateDirectories(ffmpegBaseDir);
+
+        foreach (var directory in candidateDirectories)
+        {
+            Console.WriteLine($"Checking for FFmpeg at: {Path.Combine(directory, ffmpegExecutable)}");
+            var match = FindInDirectory(directory, ffmpegExecutable, ffprobeExecutable, SearchOption.TopDirectoryOnly);
+            if (match != null)
+            {
+                return match;
+            }
+        }
+
+        if (searchAllSubdirectories)
+        {
+            foreach (var directory in candidateDirectories)
+            {
+                var match = FindInDirectory(directory, ffmpegExecutable, ffprobeExecutable, SearchOption.AllDirectories);
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindInDirectory(string directory, string ffmpegExecutable, string ffprobeExecutable, SearchOption searchOption)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        try
+        {
+            var ffmpegPath = Directory.EnumerateFiles(directory, ffmpegExecutable, searchOption).FirstOrDefault();
+            if (ffmpegPath == null)
+            {
+                return null;
+            }
+
+            string candidateDirectory = Path.GetDirectoryName(ffmpegPath)!;
+            string ffprobePath = Path.Combine(candidateDirectory, ffprobeExecutable);
+
+            if (!File.Exists(ffprobePath))
+            {
+                return null;
+            }
+
+            Console.WriteLine($"Found FFmpeg at: {ffmpegPath}");
+            return candidateDirectory;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  ⚠ Error searching '{directory}': {ex.Message}");
+            return null;
         }
     }
 
@@ -422,7 +492,12 @@ public class EmbeddedFFmpegRunner
     public static async Task<string?> GetFFmpegExecutablePathAsync()
     {
         await EnsureInitializedAsync();
-        return _ffmpegPath != null ? Path.Combine(_ffmpegPath, "ffmpeg.exe") : null;
+        if (_ffmpegPath == null)
+        {
+            return null;
+        }
+
+        return Path.Combine(_ffmpegPath, GetFFmpegExecutableName());
     }
 
     public static async Task<string?> GetFFmpegDirectoryAsync()

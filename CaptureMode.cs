@@ -28,6 +28,12 @@ public static class CaptureMode
 
     public static async Task<int> RunAsync()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("Capture mode is only supported on Windows due to DirectShow dependencies.");
+            return 1;
+        }
+
         Console.WriteLine("\n\nUSB Capture - Direct to Disk");
         Console.WriteLine("============================\n\n");
 

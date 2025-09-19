@@ -203,7 +203,7 @@ public static class FileManager
         else
         {
             Console.WriteLine("  ⚠ Some temporary files could not be cleaned up automatically");
-            Console.WriteLine("    Note: FFmpeg binaries are kept at C:\\ffmpeg for performance (reuse on next run)");
+            Console.WriteLine($"    Note: FFmpeg binaries are kept at {EmbeddedFFmpegRunner.GetPreferredFFmpegDirectory()} for performance (reuse on next run)");
         }
     }
 

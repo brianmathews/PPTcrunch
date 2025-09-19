@@ -49,24 +49,35 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 ### Building from Source
 
 1. **Clone or download** the source code
-2. **Build the executable** using the provided build script:
+2. **Build the executable** using the script for your platform:
 
-```batch
-publish.bat
-```
+   - **Windows**:
+
+     ```batch
+     publish.bat
+     ```
+
+   - **macOS (Apple silicon)**:
+
+     ```bash
+     ./publish.sh
+     ```
 
 - **Add to PATH** (recommended): Copy `publish\PPTcrunch.exe` to a directory in your system PATH
 - **Alternative**: Place `PPTcrunch.exe` in any directory and run with full path
 
 ### Using the Executable
 
-1. **First run**: The application will automatically download FFmpeg binaries to `C:\ffmpeg` (one-time only)
-2. **Subsequent runs**: FFmpeg binaries are reused from `C:\ffmpeg` for faster startup
-3. **Run**: Use `PPTcrunch.exe` from command line
+1. **First run**: The application will automatically download FFmpeg binaries to an OS-specific directory (Windows: `C:\ffmpeg`, macOS: `~/Library/Application Support/PPTcrunch/ffmpeg`).
+2. **Subsequent runs**: FFmpeg binaries are reused from that directory for faster startup.
+3. **Run**:
+   - Windows: `PPTcrunch.exe <file-pattern>`
+   - macOS: `./PPTcrunch <file-pattern>`
 
 ### Build Output Location
 
-- The build script outputs the executable to `publish\PPTcrunch.exe` in the repository root.
+- Windows builds output `publish\PPTcrunch.exe` in the repository root.
+- macOS builds output `publish/osx-arm64/PPTcrunch`.
 
 ### Adding PPTcrunch to PATH (Windows)
 
@@ -97,25 +108,20 @@ This program is distributed as a **self-contained executable** with **automatic 
 
 - ✅ **Single file**: Just `PPTcrunch.exe` - no external FFmpeg installation required
 - ✅ **Automatic FFmpeg**: Downloads and manages FFmpeg binaries automatically on first use
-- ✅ **Persistent storage**: FFmpeg binaries stored in `C:\ffmpeg` for reuse across sessions
+- ✅ **Persistent storage**: FFmpeg binaries stored in an OS-specific cache (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS) for reuse across sessions
 - ✅ **Auto-detection**: Detects NVIDIA NVENC availability and codec support; falls back to CPU automatically
 - ✅ **Hardware optimization**: Uses NVENC constant-quality mode (`-rc vbr` with `-b:v 0`) when available
 - ✅ **Quality mapping**: CPU CRF and GPU CQ are mapped to comparable visual quality per codec
-- ✅ **Windows focused**: Currently optimized for Windows x64 (see project configuration)
+- ✅ **Cross-platform builds**: Scripts provided for Windows x64 and macOS (Apple silicon) self-contained executables
 
 ## How to Use
 
-After building with `publish.bat`, use the executable:
+After building (`publish.bat` on Windows or `publish.sh` on macOS), run the executable from the publish directory:
 
-```bash
-PPTcrunch.exe <file-pattern>
-```
+- Windows: `PPTcrunch.exe <file-pattern>`
+- macOS: `./PPTcrunch <file-pattern>`
 
-Or start interactive USB capture (Windows DirectShow):
-
-```bash
-PPTcrunch.exe capture
-```
+Capture mode uses Windows-only DirectShow APIs and remains available as `PPTcrunch.exe capture` on Windows.
 
 ### Examples
 
@@ -313,7 +319,7 @@ Key parameters (dynamically set based on user choices):
 - XML reference updates are handled gracefully with warnings for any issues
 - All temporary directories are cleaned up even if errors occur
 - **Temporary Files**: The program creates and cleans up temporary directories (`PPT-temp` and `PPTX-working`) during processing
-- **FFmpeg Directory**: FFmpeg binaries are stored at `C:\ffmpeg` and are **intentionally preserved** between runs for performance (to avoid re-downloading)
+- **FFmpeg Directory**: FFmpeg binaries are stored in an OS-specific cache (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS) and are **intentionally preserved** between runs for performance (to avoid re-downloading)
 
 ## Supported Video Formats
 
@@ -329,14 +335,14 @@ Key parameters (dynamically set based on user choices):
 
 ## Requirements
 
-- Windows x64 with .NET 8 SDK (for building) or .NET 8 Runtime (for running)
+- Windows x64 or macOS (Apple silicon) with the .NET 8 SDK for building (self-contained builds include the runtime)
 - Internet connection for initial FFmpeg binary download (first run only)
 - Sufficient disk space for temporary files during processing
-- Write access to `C:\ffmpeg` directory (for FFmpeg binary storage)
+- Write access to the FFmpeg cache directory (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS)
 
 ## Troubleshooting
 
-1. **First run initialization**: On first use, the application will automatically download and initialize FFmpeg binaries to `C:\ffmpeg`
+1. **First run initialization**: On first use, the application will automatically download and initialize FFmpeg binaries to the cache directory (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS)
 2. **Permission errors**: Make sure you have write access to the directory containing the PPTX file
 3. **Large file processing**: Ensure sufficient disk space for temporary extraction and processing
 4. **GPU not being used**: The program will show NVENC availability during startup
@@ -349,7 +355,7 @@ Key parameters (dynamically set based on user choices):
    1. This usually happens when file handles are still open during cleanup
    2. The program will show warnings and provide the full paths for manual deletion
    3. Try closing any applications that might have the files open
-   4. The `C:\ffmpeg` directory is intentionally preserved for performance
+   4. The FFmpeg cache directory is intentionally preserved for performance
 
 ## Architecture
 

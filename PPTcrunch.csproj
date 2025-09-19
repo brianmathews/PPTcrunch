@@ -9,7 +9,7 @@
         <!-- Self-contained single file publishing configuration -->
         <PublishSingleFile>true</PublishSingleFile>
         <SelfContained>true</SelfContained>
-        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <RuntimeIdentifiers>win-x64;osx-arm64</RuntimeIdentifiers>
         <PublishTrimmed>false</PublishTrimmed>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
         <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>

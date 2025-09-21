@@ -188,41 +188,57 @@ class Program
         Console.WriteLine("Detecting GPU capabilities...");
         result.GPUInfo = await GPUDetectionService.DetectGPUCapabilitiesAsync();
 
-        if (result.GPUInfo.HasNvidiaGPU)
+        switch (result.GPUInfo.HardwareAcceleration)
         {
-            Console.WriteLine($"  ✓ NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
-            if (!string.IsNullOrEmpty(result.GPUInfo.DriverVersion))
-            {
-                Console.WriteLine($"    Driver version: {result.GPUInfo.DriverVersion}");
-            }
-            Console.WriteLine($"    Generation: {result.GPUInfo.CompatibilityProfile}");
-
-            if (result.GPUInfo.SupportsNVENC)
-            {
+            case HardwareAccelerationMode.NvidiaNvenc:
+                Console.WriteLine($"  ✓ NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
+                if (!string.IsNullOrEmpty(result.GPUInfo.DriverVersion))
+                {
+                    Console.WriteLine($"    Driver version: {result.GPUInfo.DriverVersion}");
+                }
+                Console.WriteLine($"    Generation: {result.GPUInfo.CompatibilityProfile}");
                 Console.WriteLine("    ✓ NVENC hardware acceleration available");
                 if (result.GPUInfo.SupportsH264)
                     Console.WriteLine("      ✓ H.264 encoding supported");
                 if (result.GPUInfo.SupportsH265)
                     Console.WriteLine("      ✓ H.265 encoding supported");
-            }
-            else
-            {
-                Console.WriteLine("    ⚠ NVENC not available (GPU too old or driver issue)");
-            }
-        }
-        else
-        {
-            Console.WriteLine("  ⚠ No NVIDIA GPU detected");
-            Console.WriteLine("    This could be due to:");
-            Console.WriteLine("    - No NVIDIA GPU present");
-            Console.WriteLine("    - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
-            Console.WriteLine("    - Outdated GPU drivers");
-            Console.WriteLine("    - nvidia-smi not available");
+                break;
+            case HardwareAccelerationMode.AppleVideoToolbox:
+                Console.WriteLine("  ✓ Apple VideoToolbox hardware acceleration detected");
+                Console.WriteLine($"    Platform: {(result.GPUInfo.IsAppleSilicon ? "Apple silicon (arm64)" : "Intel macOS")}");
+                Console.WriteLine($"    VideoToolbox profile: {result.GPUInfo.CompatibilityProfile}");
+                if (result.GPUInfo.SupportsH264)
+                    Console.WriteLine("      ✓ H.264 encoding supported");
+                if (result.GPUInfo.SupportsH265)
+                    Console.WriteLine("      ✓ H.265 encoding supported");
+                else
+                    Console.WriteLine("      ⚠ H.265 encoding not reported by this FFmpeg build");
+                break;
+            default:
+                if (result.GPUInfo.HasNvidiaGPU)
+                {
+                    Console.WriteLine($"  ⚠ NVIDIA GPU detected ({result.GPUInfo.GPUModel}) but NVENC is unavailable");
+                    Console.WriteLine("    This could be due to:");
+                    Console.WriteLine("    - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
+                    Console.WriteLine("    - Outdated GPU drivers");
+                    Console.WriteLine("    - FFmpeg build missing NVENC support");
+                }
+                else if (OperatingSystem.IsMacOS())
+                {
+                    Console.WriteLine("  ⚠ Apple VideoToolbox hardware acceleration not available");
+                    Console.WriteLine("    Ensure you're using the bundled FFmpeg build and macOS allows VideoToolbox access");
+                }
+                else
+                {
+                    Console.WriteLine("  ⚠ No supported hardware encoder detected");
+                    Console.WriteLine("    GPU acceleration requires NVIDIA NVENC or Apple VideoToolbox");
+                }
+                break;
         }
 
-        if (!result.GPUInfo.SupportsNVENC)
+        if (!result.GPUInfo.SupportsHardwareAcceleration)
         {
-            Console.WriteLine("  ⚠ GPU acceleration not available - will use CPU encoding");
+            Console.WriteLine("  ⚠ Hardware acceleration not available - will use CPU encoding");
         }
 
         result.CanProceed = true;
@@ -238,17 +254,26 @@ class Program
         Console.WriteLine("==========================");
 
         // GPU acceleration preference
-        if (systemCheck.GPUInfo.SupportsNVENC)
+        if (systemCheck.GPUInfo.SupportsHardwareAcceleration)
         {
             Console.WriteLine();
-            Console.Write($"Use GPU acceleration for faster encoding? (Y/n, default: Y): ");
+            string hardwarePrompt = systemCheck.GPUInfo.HardwareAcceleration switch
+            {
+                HardwareAccelerationMode.NvidiaNvenc => "Use NVIDIA NVENC hardware acceleration for faster encoding?",
+                HardwareAccelerationMode.AppleVideoToolbox => "Use Apple VideoToolbox hardware acceleration for faster encoding?",
+                _ => "Use hardware acceleration for faster encoding?"
+            };
+
+            Console.Write($"{hardwarePrompt} (Y/n, default: Y): ");
             string? gpuInput = Console.ReadLine()?.Trim().ToLowerInvariant();
             settings.UseGPUAcceleration = string.IsNullOrEmpty(gpuInput) || gpuInput == "y" || gpuInput == "yes";
+            settings.HardwareAcceleration = settings.UseGPUAcceleration ? systemCheck.GPUInfo.HardwareAcceleration : HardwareAccelerationMode.None;
         }
         else
         {
             settings.UseGPUAcceleration = false;
-            Console.WriteLine("GPU acceleration not available - using CPU encoding");
+            settings.HardwareAcceleration = HardwareAccelerationMode.None;
+            Console.WriteLine("Hardware acceleration not available - using CPU encoding");
         }
 
         // Codec preference
@@ -261,7 +286,7 @@ class Program
         {
             if (!systemCheck.GPUInfo.SupportsH265)
             {
-                Console.WriteLine("     Note: Your GPU doesn't support H.265 encoding - H.264 will be used if selected");
+                Console.WriteLine("     Note: Your hardware encoder doesn't support H.265 encoding - H.264 will be used if selected");
             }
         }
 
@@ -275,10 +300,10 @@ class Program
             }
             else if (codecChoice == 2)
             {
-                // Check if H.265 is supported when using GPU
+                // Check if H.265 is supported when using hardware acceleration
                 if (settings.UseGPUAcceleration && !systemCheck.GPUInfo.SupportsH265)
                 {
-                    Console.WriteLine("Warning: H.265 not supported on your GPU. Falling back to H.264.");
+                    Console.WriteLine("Warning: H.265 not supported by your hardware encoder. Falling back to H.264.");
                     settings.Codec = VideoCodec.H264;
                 }
                 else
@@ -342,7 +367,7 @@ class Program
         // Display selected settings
         Console.WriteLine();
         Console.WriteLine("Selected settings:");
-        Console.WriteLine($"  GPU acceleration: {(settings.UseGPUAcceleration ? "Yes" : "No")}");
+        Console.WriteLine($"  Hardware acceleration: {(settings.UseGPUAcceleration ? $"Yes ({GetHardwareDescription(settings.HardwareAcceleration)})" : "No")}");
         Console.WriteLine($"  Video codec: {settings.GetCodecDisplayName()}");
         Console.WriteLine($"  Quality level: {settings.GetQualityLevelDisplayName()}");
         Console.WriteLine($"  Maximum width: {(settings.MaxWidth == int.MaxValue ? "No limit" : $"{settings.MaxWidth} pixels")}");
@@ -430,6 +455,16 @@ class Program
         };
 
         return videoExtensions.Contains(extension.ToLowerInvariant());
+    }
+
+    private static string GetHardwareDescription(HardwareAccelerationMode mode)
+    {
+        return mode switch
+        {
+            HardwareAccelerationMode.NvidiaNvenc => "NVIDIA NVENC",
+            HardwareAccelerationMode.AppleVideoToolbox => "Apple VideoToolbox",
+            _ => "None"
+        };
     }
 
     private class SystemCheckResult

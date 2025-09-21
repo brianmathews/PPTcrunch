@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace PPTcrunch;
@@ -13,15 +14,27 @@ public class GPUDetectionService
         public bool SupportsNVENC { get; set; }
         public bool SupportsH264 { get; set; }
         public bool SupportsH265 { get; set; }
+        public bool SupportsVideoToolbox { get; set; }
+        public bool SupportsVideoToolboxH264 { get; set; }
+        public bool SupportsVideoToolboxH265 { get; set; }
         public bool SupportsH265_10bit { get; set; }
         public int MaxReferenceFrames { get; set; } = 2;
         public string CompatibilityProfile { get; set; } = "Default";
         public bool IsSupported { get; set; } // New field to indicate if GPU is supported for encoding
+        public bool IsAppleSilicon { get; set; }
+        public HardwareAccelerationMode HardwareAcceleration { get; set; } = HardwareAccelerationMode.None;
+        public bool SupportsHardwareAcceleration => HardwareAcceleration != HardwareAccelerationMode.None;
     }
 
     public static async Task<GPUInfo> DetectGPUCapabilitiesAsync()
     {
         var gpuInfo = new GPUInfo();
+
+        if (OperatingSystem.IsMacOS())
+        {
+            gpuInfo.IsAppleSilicon = RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+            gpuInfo.CompatibilityProfile = gpuInfo.IsAppleSilicon ? "Apple Silicon" : "macOS";
+        }
 
         // Check if nvidia-smi is available first
         bool hasNvidiaSmi = await CheckNvidiaSmiAvailabilityAsync();
@@ -35,9 +48,30 @@ public class GPUDetectionService
 
         // Check FFmpeg encoder support
         var encoderInfo = await CheckFFmpegEncoderSupportAsync();
-        gpuInfo.SupportsNVENC = encoderInfo.HasNVENC;
-        gpuInfo.SupportsH264 = encoderInfo.HasH264;
-        gpuInfo.SupportsH265 = encoderInfo.HasH265;
+        gpuInfo.SupportsNVENC = encoderInfo.HasNvenc;
+        gpuInfo.SupportsVideoToolbox = encoderInfo.HasVideoToolbox;
+
+        if (encoderInfo.HasNvenc)
+        {
+            gpuInfo.SupportsH264 = encoderInfo.HasNvencH264;
+            gpuInfo.SupportsH265 = encoderInfo.HasNvencH265;
+            gpuInfo.HardwareAcceleration = HardwareAccelerationMode.NvidiaNvenc;
+        }
+        else if (encoderInfo.HasVideoToolbox)
+        {
+            gpuInfo.SupportsVideoToolboxH264 = encoderInfo.HasVideoToolboxH264;
+            gpuInfo.SupportsVideoToolboxH265 = encoderInfo.HasVideoToolboxH265;
+            gpuInfo.SupportsH264 = encoderInfo.HasVideoToolboxH264;
+            gpuInfo.SupportsH265 = encoderInfo.HasVideoToolboxH265;
+            gpuInfo.HardwareAcceleration = HardwareAccelerationMode.AppleVideoToolbox;
+            gpuInfo.IsSupported = true;
+            gpuInfo.CompatibilityProfile = gpuInfo.IsAppleSilicon ? "Apple Silicon VideoToolbox" : "Apple VideoToolbox";
+
+            if (string.IsNullOrWhiteSpace(gpuInfo.GPUModel))
+            {
+                gpuInfo.GPUModel = gpuInfo.IsAppleSilicon ? "Apple Silicon" : "Apple GPU";
+            }
+        }
 
         // Use the comprehensive GPU capability detection from QualityConfigService
         if (gpuInfo.HasNvidiaGPU && !string.IsNullOrEmpty(gpuInfo.GPUModel))
@@ -49,6 +83,11 @@ public class GPUDetectionService
                 gpuInfo.SupportsH265_10bit = capabilities.H265_10bit;
                 gpuInfo.MaxReferenceFrames = capabilities.MaxRefs;
                 gpuInfo.CompatibilityProfile = DetermineGenerationName(gpuInfo.GPUModel);
+
+                if (gpuInfo.SupportsNVENC)
+                {
+                    gpuInfo.HardwareAcceleration = HardwareAccelerationMode.NvidiaNvenc;
+                }
 
                 // Ensure codec support is at least what the capability system reports
                 // (FFmpeg detection might fail even if GPU supports it)
@@ -135,7 +174,17 @@ public class GPUDetectionService
         return (false, string.Empty, string.Empty);
     }
 
-    private static async Task<(bool HasNVENC, bool HasH264, bool HasH265)> CheckFFmpegEncoderSupportAsync()
+    private class EncoderSupport
+    {
+        public bool HasNvenc { get; init; }
+        public bool HasNvencH264 { get; init; }
+        public bool HasNvencH265 { get; init; }
+        public bool HasVideoToolbox { get; init; }
+        public bool HasVideoToolboxH264 { get; init; }
+        public bool HasVideoToolboxH265 { get; init; }
+    }
+
+    private static async Task<EncoderSupport> CheckFFmpegEncoderSupportAsync()
     {
         try
         {
@@ -158,7 +207,7 @@ public class GPUDetectionService
             };
 
             using var process = Process.Start(startInfo);
-            if (process == null) return (false, false, false);
+            if (process == null) return new EncoderSupport();
 
             string output = await process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
@@ -167,9 +216,18 @@ public class GPUDetectionService
             {
                 bool hasH264Nvenc = output.Contains("h264_nvenc");
                 bool hasH265Nvenc = output.Contains("hevc_nvenc") || output.Contains("h265_nvenc");
-                bool hasNvenc = hasH264Nvenc || hasH265Nvenc;
+                bool hasH264Vt = output.Contains("h264_videotoolbox");
+                bool hasH265Vt = output.Contains("hevc_videotoolbox") || output.Contains("h265_videotoolbox");
 
-                return (hasNvenc, hasH264Nvenc, hasH265Nvenc);
+                return new EncoderSupport
+                {
+                    HasNvenc = hasH264Nvenc || hasH265Nvenc,
+                    HasNvencH264 = hasH264Nvenc,
+                    HasNvencH265 = hasH265Nvenc,
+                    HasVideoToolbox = hasH264Vt || hasH265Vt,
+                    HasVideoToolboxH264 = hasH264Vt,
+                    HasVideoToolboxH265 = hasH265Vt
+                };
             }
         }
         catch
@@ -177,7 +235,7 @@ public class GPUDetectionService
             // FFmpeg not available or error
         }
 
-        return (false, false, false);
+        return new EncoderSupport();
     }
 
     /// <summary>

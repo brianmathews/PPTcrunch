@@ -29,12 +29,12 @@ dotnet publish "$SCRIPT_DIR/PPTcrunch.csproj" \
 
 printf '\nChecking build results...\n\n'
 
-if [[ -f "$PUBLISH_DIR/PPTcrunch" ]]; then
+if [[ -f "$PUBLISH_DIR/pptcrunch" ]]; then
     printf '========================================\n'
     printf ' Build completed successfully!\n'
     printf '========================================\n\n'
     printf 'Single-file executable created:\n'
-    printf '  %s\n\n' "$PUBLISH_DIR/PPTcrunch"
+    printf '  %s\n\n' "$PUBLISH_DIR/pptcrunch"
     printf '[OK] Single-file deployment ready\n'
     printf '[OK] No external dependencies required\n'
     printf '[OK] Embedded FFmpeg included - no external installation needed\n'

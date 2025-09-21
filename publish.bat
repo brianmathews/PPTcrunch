@@ -17,13 +17,13 @@ echo Checking build results...
 echo.
 
 REM Check if build succeeded by verifying the executable exists
-if exist publish\PPTcrunch.exe (
+if exist publish\pptcrunch.exe (
     echo ========================================
     echo  Build completed successfully!
     echo ========================================
     echo.
     echo Single-file executable created:
-    echo publish\PPTcrunch.exe
+    echo publish\pptcrunch.exe
     echo.
     echo [OK] Single-file deployment ready
     echo [OK] No external dependencies required  

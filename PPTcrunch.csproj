@@ -9,6 +9,8 @@
         <!-- Self-contained single file publishing configuration -->
         <PublishSingleFile>true</PublishSingleFile>
         <SelfContained>true</SelfContained>
+        <AssemblyName>pptcrunch</AssemblyName>
+        <RootNamespace>PPTcrunch</RootNamespace>
         <RuntimeIdentifiers>win-x64;osx-arm64</RuntimeIdentifiers>
         <PublishTrimmed>false</PublishTrimmed>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

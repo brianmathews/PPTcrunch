@@ -7,6 +7,7 @@ public class UserSettings
     public int QualityLevel { get; set; } = 2; // 1=Smallest, 2=Balanced, 3=Highest quality
     public bool UseGPUAcceleration { get; set; } = true;
     public bool ReduceHighResTo1920 { get; set; } = true;
+    public HardwareAccelerationMode HardwareAcceleration { get; set; } = HardwareAccelerationMode.None;
 
     // Legacy property for backward compatibility
     public int Quality
@@ -44,11 +45,26 @@ public class UserSettings
 
     public string GetGpuCodecName()
     {
-        return Codec switch
+        return HardwareAcceleration switch
         {
-            VideoCodec.H264 => "h264_nvenc",
-            VideoCodec.H265 => "hevc_nvenc",
-            _ => "h264_nvenc"
+            HardwareAccelerationMode.AppleVideoToolbox => Codec switch
+            {
+                VideoCodec.H264 => "h264_videotoolbox",
+                VideoCodec.H265 => "hevc_videotoolbox",
+                _ => "h264_videotoolbox"
+            },
+            HardwareAccelerationMode.NvidiaNvenc => Codec switch
+            {
+                VideoCodec.H264 => "h264_nvenc",
+                VideoCodec.H265 => "hevc_nvenc",
+                _ => "h264_nvenc"
+            },
+            _ => Codec switch
+            {
+                VideoCodec.H264 => "h264_nvenc",
+                VideoCodec.H265 => "hevc_nvenc",
+                _ => "h264_nvenc"
+            }
         };
     }
 
@@ -80,4 +96,11 @@ public enum VideoCodec
 {
     H264 = 1,
     H265 = 2
+}
+
+public enum HardwareAccelerationMode
+{
+    None = 0,
+    NvidiaNvenc = 1,
+    AppleVideoToolbox = 2
 }

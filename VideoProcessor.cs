@@ -105,7 +105,20 @@ public class VideoProcessor
 
         // Get actual quality value for filename
         var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
-        int qualityValue = settings.UseGPUAcceleration ? (encodingSettings.Cq ?? 25) : (encodingSettings.Crf ?? 25);
+        int qualityValue;
+        if (settings.UseGPUAcceleration)
+        {
+            qualityValue = settings.HardwareAcceleration switch
+            {
+                HardwareAccelerationMode.AppleVideoToolbox => encodingSettings.VtQuality ?? encodingSettings.Cq ?? encodingSettings.Crf ?? 55,
+                HardwareAccelerationMode.NvidiaNvenc => encodingSettings.Cq ?? encodingSettings.VtQuality ?? encodingSettings.Crf ?? 25,
+                _ => encodingSettings.Crf ?? encodingSettings.Cq ?? encodingSettings.VtQuality ?? 25
+            };
+        }
+        else
+        {
+            qualityValue = encodingSettings.Crf ?? encodingSettings.Cq ?? encodingSettings.VtQuality ?? 25;
+        }
 
         // Generate codec string
         string codecString = settings.Codec == VideoCodec.H264 ? "H264" : "H265";

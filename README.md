@@ -25,8 +25,8 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 
 - **Dual File Support**: Process both PowerPoint (.pptx) files AND individual video files
 - **Wildcard Processing**: Support for wildcards to batch process multiple files (e.g., `*.mov`, `*.pptx`)
-- **Interactive Configuration**: Prompts for GPU, codec, quality level (1-3), and max width
-- **GPU Acceleration**: Uses NVIDIA GPU (NVENC) for fast video compression with CPU fallback
+- **Interactive Configuration**: Prompts for hardware acceleration, codec, quality level (1-3), and max width
+- **Hardware Acceleration**: Uses NVIDIA NVENC on Windows and Apple VideoToolbox on macOS with CPU fallback
 - **Smart Compression**: Only keeps compressed videos if they're actually smaller than originals
 - **Flexible Settings**: Customizable video resolution, codec choice, and quality levels
 - **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv and more
@@ -43,6 +43,7 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 1. **.NET 8 SDK** - Required for building the application from source
 2. **Internet connection** - Required for initial FFmpeg download on first run
 3. **Optional**: NVIDIA GPU drivers (version 416.34+ recommended for best GPU acceleration)
+4. **Optional**: macOS 11+ with Apple silicon for VideoToolbox hardware acceleration
 
 ## Installation
 
@@ -109,9 +110,9 @@ This program is distributed as a **self-contained executable** with **automatic 
 - ✅ **Single file**: Just `PPTcrunch.exe` - no external FFmpeg installation required
 - ✅ **Automatic FFmpeg**: Downloads and manages FFmpeg binaries automatically on first use
 - ✅ **Persistent storage**: FFmpeg binaries stored in an OS-specific cache (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS) for reuse across sessions
-- ✅ **Auto-detection**: Detects NVIDIA NVENC availability and codec support; falls back to CPU automatically
-- ✅ **Hardware optimization**: Uses NVENC constant-quality mode (`-rc vbr` with `-b:v 0`) when available
-- ✅ **Quality mapping**: CPU CRF and GPU CQ are mapped to comparable visual quality per codec
+- ✅ **Auto-detection**: Detects NVIDIA NVENC and Apple VideoToolbox availability; falls back to CPU automatically
+- ✅ **Hardware optimization**: Uses NVENC constant-quality mode (`-rc vbr` with `-b:v 0`) on Windows and VideoToolbox quality targeting (`-q:v` with `-b:v 0`) on macOS
+- ✅ **Quality mapping**: CPU CRF, NVENC CQ, and VideoToolbox quality settings are aligned for comparable visual results per codec
 - ✅ **Cross-platform builds**: Scripts provided for Windows x64 and macOS (Apple silicon) self-contained executables
 
 ## How to Use
@@ -267,7 +268,7 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
 
 1. **Backup Creation**: Copies the original PPTX to a ZIP file for processing
 2. **Video Extraction**: Finds videos in the `ppt/media` directory within the PPTX
-3. **Video Compression**: Uses FFmpeg with your selected settings, prioritizing GPU (NVENC) when available and ensuring even dimensions for encoder compatibility
+3. **Video Compression**: Uses FFmpeg with your selected settings, prioritizing hardware acceleration (NVENC on Windows, VideoToolbox on macOS) when available and ensuring even dimensions for encoder compatibility
 4. **File Replacement**: Replaces original videos with compressed versions
 5. **Reference Updates**: Updates all XML references to reflect any filename changes
 6. **Final Assembly**: Creates the final compressed PPTX file
@@ -286,6 +287,16 @@ ffmpeg -i "input-orig.mov" -vf "scale=1280:720" -c:v h264_nvenc -cq 22 -b:v 0 -p
 ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v hevc_nvenc -cq 26 -b:v 0 -preset slow -profile:v main -rc vbr -c:a copy -y -stats "output.mp4"
 ```
 
+**Apple VideoToolbox Command Examples:**
+
+```bash
+# H.264 hardware quality targeting (example scale=1280:720, quality level → Q 55)
+ffmpeg -i "input-orig.mov" -hwaccel videotoolbox -allow_sw 1 -vf "scale=1280:720" -c:v h264_videotoolbox -q:v 55 -b:v 0 -pix_fmt yuv420p -c:a copy -y -stats "output.mp4"
+
+# H.265 hardware quality targeting (example scale=1920:1080, quality level → Q 50)
+ffmpeg -i "input-orig.mov" -hwaccel videotoolbox -allow_sw 1 -vf "scale=1920:1080" -c:v hevc_videotoolbox -q:v 50 -b:v 0 -pix_fmt yuv420p -tag:v hvc1 -c:a copy -y -stats "output.mp4"
+```
+
 **CPU Command Examples:**
 
 ```bash
@@ -298,9 +309,11 @@ ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v libx265 -crf 24 -preset me
 
 Key parameters (dynamically set based on user choices):
 
-- **GPU**: `-c:v h264_nvenc` or `-c:v hevc_nvenc` (H.264/H.265 NVENC encoders)
-- **GPU**: `-cq` (constant quality) with `-b:v 0` and `-rc vbr` (true CQ mode)
-- **GPU**: `-preset slow` and appropriate `-profile:v` per codec
+- **GPU (Windows)**: `-c:v h264_nvenc` or `-c:v hevc_nvenc` (H.264/H.265 NVENC encoders)
+- **GPU (Windows)**: `-cq` (constant quality) with `-b:v 0` and `-rc vbr` (true CQ mode)
+- **GPU (Windows)**: `-preset slow` and appropriate `-profile:v` per codec
+- **Apple VideoToolbox (macOS)**: `-c:v h264_videotoolbox` or `-c:v hevc_videotoolbox`
+- **Apple VideoToolbox (macOS)**: `-q:v` quality selector with `-b:v 0`, `-pix_fmt yuv420p`, and optional `-tag:v hvc1` for H.265
 - **CPU**: `-c:v libx264` or `-c:v libx265` (H.264/H.265 software encoders)
 - **CPU**: `-crf` per quality level, `-preset medium`
 - `-vf scale=...`: Downscales if needed (no upscaling), maintains aspect ratio, ensures even dimensions
@@ -345,11 +358,11 @@ Key parameters (dynamically set based on user choices):
 1. **First run initialization**: On first use, the application will automatically download and initialize FFmpeg binaries to the cache directory (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS)
 2. **Permission errors**: Make sure you have write access to the directory containing the PPTX file
 3. **Large file processing**: Ensure sufficient disk space for temporary extraction and processing
-4. **GPU not being used**: The program will show NVENC availability during startup
-   1. Ensure you have an NVIDIA GPU that supports NVENC (GTX 600+ or RTX series)
-   2. Update NVIDIA GPU drivers to the latest version
-   3. The downloaded FFmpeg includes NVENC support automatically
-   4. If GPU fails, the program automatically falls back to CPU compression
+4. **Hardware acceleration not being used**: The program will show NVENC/VideoToolbox availability during startup
+   1. On Windows ensure you have an NVIDIA GPU that supports NVENC (GTX 600+ or RTX series) and updated drivers
+   2. On macOS ensure you're using the bundled Apple silicon build and grant macOS permission for VideoToolbox access
+   3. The downloaded FFmpeg bundles include both NVENC and VideoToolbox support automatically
+   4. If hardware acceleration fails, the program automatically falls back to CPU compression
 5. **Network connectivity**: Initial setup requires internet access to download FFmpeg binaries (one-time only)
 6. **Temporary directories not cleaned up**: If you see `PPT-temp` or `PPTX-working` directories left behind:
    1. This usually happens when file handles are still open during cleanup
@@ -375,7 +388,7 @@ The application is organized into focused classes for maintainability:
 
 The program includes several improvements for reliability and performance:
 
-- **GPU Acceleration**: NVIDIA NVENC hardware encoding for faster compression when available
+- **Hardware Acceleration**: NVIDIA NVENC (Windows) and Apple VideoToolbox (macOS) provide faster compression when available
 - **Automatic Fallback**: Falls back to CPU encoding if GPU is unavailable
 - **Smart File Size Checking**: Only uses compressed files if they're actually smaller
 - **Progress Feedback**: Shows real-time FFmpeg output during compression
@@ -386,8 +399,8 @@ The program includes several improvements for reliability and performance:
 
 The program uses intelligent decision-making for optimal results:
 
-1. **GPU First**: Attempts NVIDIA GPU acceleration for faster compression
-2. **CPU Fallback**: Falls back to CPU encoding if GPU fails or is unavailable
+1. **Hardware First**: Attempts NVIDIA NVENC (Windows) or Apple VideoToolbox (macOS) for faster compression
+2. **CPU Fallback**: Falls back to CPU encoding if hardware acceleration fails or is unavailable
 3. **Size Comparison**: Compares compressed file size to original after encoding
 4. **Best Choice**: Keeps whichever file is smaller (compressed or original)
 5. **XML Preservation**: Only updates XML references for files that actually changed extensions
@@ -430,6 +443,8 @@ The program uses different presets for CPU and GPU encoding that balance speed v
 | medium | p4 | ⭐⭐⭐ | ⭐⭐⭐⭐ | Good balance of speed/quality |
 | fast | p1 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | Maximum speed encoding |
 
+> Apple VideoToolbox encoders use quality targeting via `-q:v` instead of presets; recommended values are listed in the quality mapping table below.
+
 ### Quality Settings Reference
 
 #### H.264 Quality Levels (CRF for CPU, CQ for GPU)
@@ -462,22 +477,29 @@ The program uses different presets for CPU and GPU encoding that balance speed v
 
 The program maps user-friendly quality levels (1-3) to concrete settings:
 
-| User Level | Description | H.264 CPU (CRF) | H.264 GPU (CQ) | H.265 CPU (CRF) | H.265 GPU (CQ) |
-|------------|-------------|------------------|-----------------|------------------|-----------------|
-| **1** | Smallest file with passable quality | 26 | 26 | 25 | 28 |
-| **2** | Balanced with good quality ⭐ | 22 | 22 | 24 | 26 |
-| **3** | Quality indistinguishable from source | 20 | 20 | 22 | 23 |
+| User Level | Description | H.264 CPU (CRF) | H.264 NVENC (CQ) | H.264 VideoToolbox (Q) | H.265 CPU (CRF) | H.265 NVENC (CQ) | H.265 VideoToolbox (Q) |
+|------------|-------------|------------------|-------------------|-------------------------|------------------|-------------------|--------------------------|
+| **1** | Smallest file with passable quality | 26 | 26 | 68 | 25 | 28 | 62 |
+| **2** | Balanced with good quality ⭐ | 22 | 22 | 55 | 24 | 26 | 50 |
+| **3** | Quality indistinguishable from source | 20 | 20 | 45 | 22 | 23 | 42 |
 
-Note: CPU CRF and GPU CQ values are chosen to produce comparable visual quality per codec.
+Note: CPU CRF, NVENC CQ, and VideoToolbox `-q:v` values are chosen to produce comparable visual quality per codec.
 
-### GPU Acceleration Benefits
+### Hardware Acceleration Benefits
 
-When using NVIDIA GPU acceleration with NVENC:
+**NVIDIA NVENC (Windows):**
 
 - **Speed**: 5-10x faster encoding compared to CPU
 - **Constant Quality**: Uses `-b:v 0` for true constant quality without bitrate limitations
 - **Efficiency**: Frees up CPU for other tasks during encoding
 - **Quality**: Modern NVENC (Turing/Ampere) approaches software encoder quality
+
+**Apple VideoToolbox (macOS):**
+
+- **Zero-Copy Pipelines**: Utilizes dedicated Apple silicon media engines with minimal CPU overhead
+- **Consistent Quality**: Uses `-q:v` quality targeting with `-b:v 0` for bitrate-free compression control
+- **Broad Compatibility**: Outputs standard `yuv420p` MP4 files (H.264/H.265) with `hvc1` tagging for HEVC playback
+- **Optional Hardware Decode**: `-hwaccel videotoolbox` reduces decoding cost when transcoding high-resolution sources
 
 ### Advanced Configuration
 
@@ -491,16 +513,17 @@ When using NVIDIA GPU acceleration with NVENC:
 | **2** | Balanced with good quality ⭐ | CRF/CQ: 22 | CRF/CQ: 26 |
 | **3** | Quality indistinguishable from source | CRF/CQ: 20 | CRF/CQ: 23 |
 
-**Automatic Driver Detection:**
+**Hardware Capability Detection:**
 
 - NVENC capability is detected automatically. Current builds use standard `vbr` rate control with constant quality (`-b:v 0`).
-- If NVENC is unavailable, CPU encoding with CRF is used.
+- VideoToolbox availability is verified by enumerating FFmpeg encoders and downloading Apple silicon-optimized binaries.
+- If hardware acceleration is unavailable, CPU encoding with CRF is used.
 
-**GPU Compatibility:**
+**Hardware Compatibility:**
 
-- **GTX 1060+, RTX series**: Full H.264 and H.265 hardware acceleration support
-- **Older GPUs**: H.264 acceleration only
-- **No NVIDIA GPU**: Falls back to optimized CPU encoding
+- **GTX 1060+, RTX series**: Full H.264 and H.265 NVENC hardware acceleration support
+- **Apple silicon (M1/M2/M3/M4)**: Full H.264 and H.265 VideoToolbox hardware acceleration support
+- **Older GPUs or unsupported platforms**: Falls back to optimized CPU encoding
 
 ## Technical Notes
 

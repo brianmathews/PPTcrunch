@@ -26,10 +26,16 @@ public class FFmpegRunner
 
     private static async Task<bool> TryCompressWithGPU(string inputPath, string outputPath, UserSettings settings)
     {
-        // Build the FFmpeg command with NVIDIA GPU acceleration
         string arguments = BuildFFmpegArgumentsGPU(inputPath, outputPath, settings);
 
-        Console.WriteLine($"Trying GPU compression with command:");
+        string hardwareLabel = settings.HardwareAcceleration switch
+        {
+            HardwareAccelerationMode.AppleVideoToolbox => "Apple VideoToolbox",
+            HardwareAccelerationMode.NvidiaNvenc => "NVIDIA NVENC",
+            _ => "GPU"
+        };
+
+        Console.WriteLine($"Trying {hardwareLabel} compression with command:");
         Console.WriteLine($"ffmpeg {arguments}");
         Console.WriteLine();
 
@@ -38,10 +44,19 @@ public class FFmpegRunner
         if (!result)
         {
             Console.WriteLine("GPU compression failed. This could be due to:");
-            Console.WriteLine("  - FFmpeg not compiled with NVENC support");
-            Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
-            Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
-            Console.WriteLine("  - GPU is busy with other tasks");
+            if (settings.HardwareAcceleration == HardwareAccelerationMode.NvidiaNvenc)
+            {
+                Console.WriteLine("  - FFmpeg not compiled with NVENC support");
+                Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
+                Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
+                Console.WriteLine("  - GPU is busy with other tasks");
+            }
+            else if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)
+            {
+                Console.WriteLine("  - FFmpeg build missing VideoToolbox encoder support");
+                Console.WriteLine("  - macOS security settings blocking VideoToolbox access");
+                Console.WriteLine("  - Unsupported codec/quality combination for this hardware");
+            }
         }
 
         return result;
@@ -135,6 +150,11 @@ public class FFmpegRunner
 
     private static string BuildFFmpegArgumentsGPU(string inputPath, string outputPath, UserSettings settings)
     {
+        if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)
+        {
+            return BuildFFmpegArgumentsVideoToolbox(inputPath, outputPath, settings);
+        }
+
         // Use NVIDIA GPU acceleration for faster encoding
         var args = new StringBuilder();
 
@@ -216,6 +236,41 @@ public class FFmpegRunner
         args.Append("-stats ");
 
         // Output file
+        args.Append($"\"{outputPath}\"");
+
+        return args.ToString();
+    }
+
+    private static string BuildFFmpegArgumentsVideoToolbox(string inputPath, string outputPath, UserSettings settings)
+    {
+        var args = new StringBuilder();
+
+        args.Append($"-i \"{inputPath}\" ");
+
+        string scaleFilter = settings.MaxWidth == int.MaxValue
+            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
+        args.Append("-hwaccel videotoolbox -allow_sw 1 ");
+        args.Append($"-vf \"{scaleFilter}\" ");
+
+        args.Append($"-c:v {settings.GetGpuCodecName()} ");
+
+        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
+        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
+
+        int qualityValue = encodingSettings.VtQuality ?? 55;
+        args.Append($"-q:v {qualityValue} ");
+        args.Append("-b:v 0 ");
+        args.Append("-pix_fmt yuv420p ");
+
+        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+        {
+            args.Append($"-tag:v {codecParams.Tag} ");
+        }
+
+        args.Append("-c:a copy ");
+        args.Append("-y ");
+        args.Append("-stats ");
         args.Append($"\"{outputPath}\"");
 
         return args.ToString();

@@ -44,12 +44,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 26, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 26, VtQuality = 68, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 25, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 28, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 28, VtQuality = 62, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 },
                 ["2"] = new QualityLevel
@@ -58,12 +58,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 22, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 22, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 22, VtQuality = 55, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 24, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 26, VtQuality = 50, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 },
                 ["3"] = new QualityLevel
@@ -72,12 +72,12 @@ public class QualityConfigService
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 20, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 20, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 20, VtQuality = 45, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 22, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 23, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = new EncodingSettings { Cq = 23, VtQuality = 42, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
                     }
                 }
             },
@@ -239,6 +239,7 @@ public class EncodingSettings
 {
     public int? Crf { get; set; }
     public int? Cq { get; set; }
+    public int? VtQuality { get; set; }
     public string Preset { get; set; } = string.Empty;
     public string Rc { get; set; } = string.Empty;
     public string Tune { get; set; } = string.Empty;

@@ -1,4 +1,7 @@
 
+using System.IO.Compression;
+using System.Net.Http;
+using System.Runtime.InteropServices;
 using Xabe.FFmpeg;
 using Xabe.FFmpeg.Downloader;
 
@@ -32,8 +35,7 @@ public class EmbeddedFFmpegRunner
             {
                 Console.WriteLine($"Downloading FFmpeg binaries to {ffmpegBaseDir}...");
 
-                FFmpeg.SetExecutablesPath(ffmpegBaseDir);
-                await FFmpegDownloader.GetLatestVersion(FFmpegVersion.Official, ffmpegBaseDir);
+                await DownloadFFmpegAsync(ffmpegBaseDir);
                 Console.WriteLine("FFmpeg binaries downloaded successfully");
 
                 ffmpegDirectory = FindExistingFFmpegDirectory(ffmpegBaseDir, searchAllSubdirectories: true);
@@ -69,6 +71,53 @@ public class EmbeddedFFmpegRunner
             Console.WriteLine($"Failed to initialize embedded FFmpeg: {ex.Message}");
             throw;
         }
+    }
+
+    private static IConversion CreateConversion(IMediaInfo mediaInfo, string outputPath)
+    {
+        return FFmpeg.Conversions.New()
+            .AddStream(mediaInfo.VideoStreams.ToArray())
+            .AddStream(mediaInfo.AudioStreams.ToArray())
+            .SetOutput(outputPath)
+            .SetOverwriteOutput(true);
+    }
+
+    private static void AttachProgressHandlers(IConversion conversion)
+    {
+        conversion.OnProgress += (sender, eventArgs) =>
+        {
+            var percent = Math.Round((double)eventArgs.Percent, 1);
+            var processed = eventArgs.Duration;
+            var total = eventArgs.TotalLength;
+            Console.Write($"\rProgress: {percent}% [{processed:hh\\:mm\\:ss} / {total:hh\\:mm\\:ss}]");
+        };
+
+        conversion.OnDataReceived += (sender, eventArgs) =>
+        {
+            if (!string.IsNullOrWhiteSpace(eventArgs.Data) && eventArgs.Data.Contains("frame="))
+            {
+                Console.Write($"\r{eventArgs.Data.Trim()}");
+            }
+        };
+    }
+
+    private static void PrintCommand(string title, string inputPath, string outputPath, IEnumerable<string> args)
+    {
+        var argumentString = string.Join(" ", args);
+        Console.WriteLine($"\nFFmpeg Command Parameters ({title}):");
+        Console.WriteLine("==================================================");
+        Console.WriteLine($"ffmpeg -i \"{inputPath}\" {argumentString} \"{outputPath}\"");
+        Console.WriteLine("==================================================\n");
+    }
+
+    private static string GetHardwareLabel(HardwareAccelerationMode mode)
+    {
+        return mode switch
+        {
+            HardwareAccelerationMode.NvidiaNvenc => "NVIDIA NVENC GPU",
+            HardwareAccelerationMode.AppleVideoToolbox => "Apple VideoToolbox",
+            _ => "hardware"
+        };
     }
 
     public static string GetPreferredFFmpegDirectory() => GetDefaultFFmpegBaseDirectory();
@@ -191,28 +240,83 @@ public class EmbeddedFFmpegRunner
         }
     }
 
+    private static async Task DownloadFFmpegAsync(string ffmpegBaseDir)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            await DownloadMacFFmpegAsync(ffmpegBaseDir);
+            return;
+        }
+
+        FFmpeg.SetExecutablesPath(ffmpegBaseDir);
+        await FFmpegDownloader.GetLatestVersion(FFmpegVersion.Official, ffmpegBaseDir);
+    }
+
+    private static async Task DownloadMacFFmpegAsync(string ffmpegBaseDir)
+    {
+        string archiveName = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+            ? "ffmpeg-master-latest-macos64-arm64-static.zip"
+            : "ffmpeg-master-latest-macos64-static.zip";
+        string downloadUrl = $"https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/{archiveName}";
+
+        string tempFile = Path.Combine(Path.GetTempPath(), archiveName);
+        if (File.Exists(tempFile))
+        {
+            try
+            {
+                File.Delete(tempFile);
+            }
+            catch
+            {
+                // Non-critical cleanup failure
+            }
+        }
+
+        Console.WriteLine($"  Downloading Apple optimized FFmpeg build: {archiveName}");
+
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        using var response = await httpClient.GetAsync(downloadUrl);
+        response.EnsureSuccessStatusCode();
+
+        await using (var fileStream = File.Create(tempFile))
+        {
+            await response.Content.CopyToAsync(fileStream);
+        }
+
+        Console.WriteLine("  Extracting FFmpeg archive...");
+        ZipFile.ExtractToDirectory(tempFile, ffmpegBaseDir, true);
+
+        try
+        {
+            File.Delete(tempFile);
+        }
+        catch
+        {
+            // Ignore extraction cleanup failures
+        }
+    }
+
     public static async Task<bool> CompressVideoAsync(string inputPath, string outputPath, UserSettings settings)
     {
         await EnsureInitializedAsync();
 
-        // Check if GPU acceleration is preferred and available
-        if (settings.UseGPUAcceleration)
+        if (settings.UseGPUAcceleration && settings.HardwareAcceleration != HardwareAccelerationMode.None)
         {
-            bool gpuSuccess = await TryCompressWithGPU(inputPath, outputPath, settings);
-            if (gpuSuccess)
+            bool hardwareSuccess = await TryCompressWithHardwareAcceleration(inputPath, outputPath, settings);
+            if (hardwareSuccess)
             {
                 return true;
             }
 
-            Console.WriteLine("GPU compression failed, falling back to CPU compression...");
+            Console.WriteLine("Hardware compression failed, falling back to CPU compression...");
         }
 
         return await TryCompressWithCPU(inputPath, outputPath, settings);
     }
 
-    private static async Task<bool> TryCompressWithGPU(string inputPath, string outputPath, UserSettings settings)
+    private static async Task<bool> TryCompressWithHardwareAcceleration(string inputPath, string outputPath, UserSettings settings)
     {
-        Console.WriteLine($"Trying GPU compression...");
+        Console.WriteLine($"Trying {GetHardwareLabel(settings.HardwareAcceleration)} compression...");
 
         try
         {
@@ -224,121 +328,145 @@ public class EmbeddedFFmpegRunner
                 return false;
             }
 
-            // Get quality settings from config
             var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
             var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
-
             var scaleSize = GetScaleSize(videoStream.Width, videoStream.Height, settings.MaxWidth);
 
-            // Build conversion with GPU settings
-            var conversion = FFmpeg.Conversions.New()
-                .AddStream(mediaInfo.VideoStreams.ToArray())
-                .AddStream(mediaInfo.AudioStreams.ToArray())
-                .SetOutput(outputPath)
-                .SetOverwriteOutput(true);
-
-            // Build custom arguments for GPU encoding
-            var args = new List<string>();
-
-            // Video filters
-            args.Add($"-vf");
-            args.Add($"scale={scaleSize.width}:{scaleSize.height}");
-
-            // GPU codec
-            args.Add($"-c:v");
-            args.Add(GetGpuCodecName(settings.Codec));
-
-            // Quality settings
-            args.Add($"-cq");
-            args.Add($"{encodingSettings.Cq ?? 23}");
-
-            args.Add($"-b:v");
-            args.Add("0"); // True constant quality
-
-            args.Add($"-preset");
-            args.Add(encodingSettings.Preset ?? "slow");
-
-            args.Add($"-profile:v");
-            args.Add(codecParams.Profile ?? "high");
-
-            args.Add($"-rc");
-            args.Add(encodingSettings.Rc ?? "vbr");
-
-            args.Add($"-bf");
-            args.Add($"{codecParams.Bf ?? 3}");
-
-            args.Add($"-refs");
-            args.Add($"{codecParams.Refs ?? 4}");
-
-            // Add H.265 specific settings
-            if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+            return settings.HardwareAcceleration switch
             {
-                args.Add($"-tag:v");
-                args.Add(codecParams.Tag);
-            }
-
-            // Add modern quality enhancement parameters if available
-            if (!string.IsNullOrEmpty(encodingSettings.Tune))
-            {
-                args.Add($"-tune");
-                args.Add(encodingSettings.Tune);
-            }
-
-            if (encodingSettings.Multipass.HasValue)
-            {
-                args.Add($"-multipass");
-                args.Add($"{encodingSettings.Multipass.Value}");
-            }
-
-            // Audio settings
-            args.Add($"-c:a");
-            args.Add("copy");
-
-            // Additional settings
-            args.Add("-y");
-            args.Add("-stats");
-
-            conversion.AddParameter(string.Join(" ", args));
-
-            // Display FFmpeg command line parameters
-            Console.WriteLine("\nFFmpeg Command Parameters (GPU Acceleration):");
-            Console.WriteLine("==================================================");
-            Console.WriteLine($"ffmpeg -i \"{inputPath}\" {string.Join(" ", args)} \"{outputPath}\"");
-            Console.WriteLine("==================================================\n");
-
-            // Add progress reporting
-            conversion.OnProgress += (sender, eventArgs) =>
-            {
-                var percent = Math.Round((double)eventArgs.Percent, 1);
-                var processed = eventArgs.Duration;
-                var total = eventArgs.TotalLength;
-                Console.Write($"\rProgress: {percent}% [{processed:hh\\:mm\\:ss} / {total:hh\\:mm\\:ss}]");
+                HardwareAccelerationMode.NvidiaNvenc => await RunNvencConversion(mediaInfo, inputPath, outputPath, settings, encodingSettings, codecParams, scaleSize),
+                HardwareAccelerationMode.AppleVideoToolbox => await RunVideoToolboxConversion(mediaInfo, inputPath, outputPath, settings, encodingSettings, codecParams, scaleSize),
+                _ => false
             };
-
-            conversion.OnDataReceived += (sender, eventArgs) =>
-            {
-                // Show FFmpeg output for debugging (you can comment this out if too verbose)
-                if (!string.IsNullOrWhiteSpace(eventArgs.Data) && eventArgs.Data.Contains("frame="))
-                {
-                    Console.Write($"\r{eventArgs.Data.Trim()}");
-                }
-            };
-
-            var result = await conversion.Start();
-            Console.WriteLine(); // New line after progress
-            Console.WriteLine("✓ GPU compression completed successfully");
-            return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"GPU compression error: {ex.Message}");
-            Console.WriteLine("This could be due to:");
-            Console.WriteLine("  - FFmpeg not compiled with NVENC support");
-            Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
-            Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
-            Console.WriteLine("  - GPU is busy with other tasks");
+            Console.WriteLine($"Hardware compression error: {ex.Message}");
+
+            if (settings.HardwareAcceleration == HardwareAccelerationMode.NvidiaNvenc)
+            {
+                Console.WriteLine("This could be due to:");
+                Console.WriteLine("  - FFmpeg not compiled with NVENC support");
+                Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
+                Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
+                Console.WriteLine("  - GPU is busy with other tasks");
+            }
+            else if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)
+            {
+                Console.WriteLine("This could be due to:");
+                Console.WriteLine("  - macOS security restrictions preventing VideoToolbox access");
+                Console.WriteLine("  - FFmpeg build missing VideoToolbox encoder support");
+                Console.WriteLine("  - Unsupported codec/quality combination for this hardware");
+            }
+
             return false;
         }
+    }
+
+    private static async Task<bool> RunNvencConversion(IMediaInfo mediaInfo, string inputPath, string outputPath, UserSettings settings, EncodingSettings encodingSettings, CodecParams codecParams, (int width, int height) scaleSize)
+    {
+        var conversion = CreateConversion(mediaInfo, outputPath);
+
+        var args = new List<string>
+        {
+            "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
+            "-c:v", GetNvencCodecName(settings.Codec),
+            "-cq", $"{encodingSettings.Cq ?? 23}",
+            "-b:v", "0"
+        };
+
+        if (!string.IsNullOrEmpty(encodingSettings.Rc))
+        {
+            args.Add("-rc");
+            args.Add(encodingSettings.Rc);
+        }
+
+        if (!string.IsNullOrEmpty(encodingSettings.Preset))
+        {
+            args.Add("-preset");
+            args.Add(encodingSettings.Preset);
+        }
+
+        args.Add("-profile:v");
+        args.Add(codecParams.Profile ?? "high");
+
+        args.Add("-bf");
+        args.Add($"{codecParams.Bf ?? 3}");
+
+        args.Add("-refs");
+        args.Add($"{codecParams.Refs ?? 4}");
+
+        if (!string.IsNullOrEmpty(encodingSettings.Tune))
+        {
+            args.Add("-tune");
+            args.Add(encodingSettings.Tune);
+        }
+
+        if (encodingSettings.Multipass.HasValue)
+        {
+            args.Add("-multipass");
+            args.Add($"{encodingSettings.Multipass.Value}");
+        }
+
+        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+        {
+            args.Add("-tag:v");
+            args.Add(codecParams.Tag);
+        }
+
+        args.Add("-c:a");
+        args.Add("copy");
+
+        args.Add("-y");
+        args.Add("-stats");
+
+        conversion.AddParameter(string.Join(" ", args));
+
+        PrintCommand("Hardware Acceleration (NVIDIA NVENC)", inputPath, outputPath, args);
+        AttachProgressHandlers(conversion);
+
+        await conversion.Start();
+        Console.WriteLine();
+        Console.WriteLine("✓ NVIDIA NVENC compression completed successfully");
+        return true;
+    }
+
+    private static async Task<bool> RunVideoToolboxConversion(IMediaInfo mediaInfo, string inputPath, string outputPath, UserSettings settings, EncodingSettings encodingSettings, CodecParams codecParams, (int width, int height) scaleSize)
+    {
+        var conversion = CreateConversion(mediaInfo, outputPath);
+
+        var args = new List<string>
+        {
+            "-hwaccel", "videotoolbox",
+            "-allow_sw", "1",
+            "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
+            "-c:v", GetVideoToolboxCodecName(settings.Codec),
+            "-q:v", $"{encodingSettings.VtQuality ?? 55}",
+            "-b:v", "0",
+            "-pix_fmt", "yuv420p"
+        };
+
+        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
+        {
+            args.Add("-tag:v");
+            args.Add(codecParams.Tag);
+        }
+
+        args.Add("-c:a");
+        args.Add("copy");
+
+        args.Add("-y");
+        args.Add("-stats");
+
+        conversion.AddParameter(string.Join(" ", args));
+
+        PrintCommand("Hardware Acceleration (Apple VideoToolbox)", inputPath, outputPath, args);
+        AttachProgressHandlers(conversion);
+
+        await conversion.Start();
+        Console.WriteLine();
+        Console.WriteLine("✓ Apple VideoToolbox compression completed successfully");
+        return true;
     }
 
     private static async Task<bool> TryCompressWithCPU(string inputPath, string outputPath, UserSettings settings)
@@ -361,83 +489,38 @@ public class EmbeddedFFmpegRunner
 
             var scaleSize = GetScaleSize(videoStream.Width, videoStream.Height, settings.MaxWidth);
 
-            // Build conversion with CPU settings
-            var conversion = FFmpeg.Conversions.New()
-                .AddStream(mediaInfo.VideoStreams.ToArray())
-                .AddStream(mediaInfo.AudioStreams.ToArray())
-                .SetOutput(outputPath)
-                .SetOverwriteOutput(true);
+            var conversion = CreateConversion(mediaInfo, outputPath);
 
-            // Build arguments for CPU encoding
-            var args = new List<string>();
+            var args = new List<string>
+            {
+                "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
+                "-c:v", GetCpuCodecName(settings.Codec),
+                "-crf", $"{encodingSettings.Crf ?? 23}",
+                "-preset", "medium",
+                "-profile:v", codecParams.Profile ?? "high",
+                "-bf", $"{codecParams.Bf ?? 3}",
+                "-refs", $"{codecParams.Refs ?? 4}"
+            };
 
-            // Video filters
-            args.Add($"-vf");
-            args.Add($"scale={scaleSize.width}:{scaleSize.height}");
-
-            // CPU codec
-            args.Add($"-c:v");
-            args.Add(GetCpuCodecName(settings.Codec));
-
-            // Quality settings
-            args.Add($"-crf");
-            args.Add($"{encodingSettings.Crf ?? 23}");
-
-            args.Add($"-preset");
-            args.Add("medium");
-
-            args.Add($"-profile:v");
-            args.Add(codecParams.Profile ?? "high");
-
-            args.Add($"-bf");
-            args.Add($"{codecParams.Bf ?? 3}");
-
-            args.Add($"-refs");
-            args.Add($"{codecParams.Refs ?? 4}");
-
-            // Add H.265 specific settings
             if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
             {
-                args.Add($"-tag:v");
+                args.Add("-tag:v");
                 args.Add(codecParams.Tag);
             }
 
-            // Audio settings
-            args.Add($"-c:a");
+            args.Add("-c:a");
             args.Add("copy");
 
-            // Additional settings
             args.Add("-y");
             args.Add("-stats");
 
             conversion.AddParameter(string.Join(" ", args));
 
-            // Display FFmpeg command line parameters
-            Console.WriteLine("\nFFmpeg Command Parameters (CPU Processing):");
-            Console.WriteLine("==================================================");
-            Console.WriteLine($"ffmpeg -i \"{inputPath}\" {string.Join(" ", args)} \"{outputPath}\"");
-            Console.WriteLine("==================================================\n");
+            PrintCommand("CPU Processing", inputPath, outputPath, args);
+            AttachProgressHandlers(conversion);
 
-            // Add progress reporting
-            conversion.OnProgress += (sender, eventArgs) =>
-            {
-                var percent = Math.Round((double)eventArgs.Percent, 1);
-                var processed = eventArgs.Duration;
-                var total = eventArgs.TotalLength;
-                Console.Write($"\rProgress: {percent}% [{processed:hh\\:mm\\:ss} / {total:hh\\:mm\\:ss}]");
-            };
-
-            conversion.OnDataReceived += (sender, eventArgs) =>
-            {
-                // Show FFmpeg output for debugging (you can comment this out if too verbose)
-                if (!string.IsNullOrWhiteSpace(eventArgs.Data) && eventArgs.Data.Contains("frame="))
-                {
-                    Console.Write($"\r{eventArgs.Data.Trim()}");
-                }
-            };
-
-            var result = await conversion.Start();
-            Console.WriteLine(); // New line after progress
+            await conversion.Start();
+            Console.WriteLine();
             Console.WriteLine("✓ CPU compression completed successfully");
             return true;
         }
@@ -448,13 +531,23 @@ public class EmbeddedFFmpegRunner
         }
     }
 
-    private static string GetGpuCodecName(VideoCodec codec)
+    private static string GetNvencCodecName(VideoCodec codec)
     {
         return codec switch
         {
             VideoCodec.H264 => "h264_nvenc",
             VideoCodec.H265 => "hevc_nvenc",
             _ => "h264_nvenc"
+        };
+    }
+
+    private static string GetVideoToolboxCodecName(VideoCodec codec)
+    {
+        return codec switch
+        {
+            VideoCodec.H264 => "h264_videotoolbox",
+            VideoCodec.H265 => "hevc_videotoolbox",
+            _ => "h264_videotoolbox"
         };
     }
 

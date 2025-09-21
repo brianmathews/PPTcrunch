@@ -38,7 +38,7 @@ if [[ -f "$PUBLISH_DIR/PPTcrunch" ]]; then
     printf '[OK] Single-file deployment ready\n'
     printf '[OK] No external dependencies required\n'
     printf '[OK] Embedded FFmpeg included - no external installation needed\n'
-    printf '[OK] Auto-detects NVIDIA GPU capabilities when available\n'
+    printf '[OK] Auto-detects NVIDIA NVENC and Apple VideoToolbox hardware when available\n'
     printf '[OK] Self-contained includes .NET 8 runtime\n\n'
     printf 'Files in publish directory:\n'
     ls -1 "$PUBLISH_DIR"

@@ -78,8 +78,7 @@ if [ -f "$ENTITLEMENTS_FILE" ]; then
     echo "Entitlements file found: $ENTITLEMENTS_FILE"
     cat "$ENTITLEMENTS_FILE"
 else
-    echo "WARNING: Entitlements file not found at $ENTITLEMENTS_FILE"
-    echo "Codesign will continue without custom entitlements"
+    echo "No custom entitlements file found - CLI programs typically don't require special entitlements"
 fi
 
 echo "Checking certificate availability..."
@@ -111,8 +110,12 @@ sign_binary() {
         -f
         -v
         --timestamp
-        "${runtime_flag[@]}"
     )
+    
+    # Add runtime flag only if it's not empty
+    if [ ${#runtime_flag[@]} -gt 0 ]; then
+        sign_args+=("${runtime_flag[@]}")
+    fi
 
     if [ -f "$ENTITLEMENTS_FILE" ]; then
         sign_args+=(--entitlements "$ENTITLEMENTS_FILE")

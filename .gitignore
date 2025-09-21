@@ -92,5 +92,9 @@ PPTX-working/
 *.userosscache
 *.sln.docstates 
 
+# User-specific secrets
+secrets.json
+**/sign-macos-builds.env
+
 # Captured videos
 *.mkv

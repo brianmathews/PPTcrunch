@@ -47,6 +47,29 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 
 ## Installation
 
+### Pre-built Executable (macOS)
+
+For macOS users, a pre-built, digitally signed executable is available for download:
+
+1. **Download** the executable from: https://ab6d.com/wp-content/uploads/2025/09/pptcrunch-macos-final.zip
+2. **Extract** the ZIP file to get the `pptcrunch` executable and README
+3. **Make executable** (if needed):
+   ```bash
+   chmod +x pptcrunch
+   ```
+4. **Add to PATH** (recommended): Move `pptcrunch` to a directory in your system PATH, such as:
+   ```bash
+   sudo mv pptcrunch /usr/local/bin/
+   ```
+   Or create a local bin directory:
+   ```bash
+   mkdir -p ~/bin
+   mv pptcrunch ~/bin/
+   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+5. **Run**: `pptcrunch <file-pattern>`
+
 ### Building from Source
 
 1. **Clone or download** the source code

@@ -254,45 +254,53 @@ public class EmbeddedFFmpegRunner
 
     private static async Task DownloadMacFFmpegAsync(string ffmpegBaseDir)
     {
-        string archiveName = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-            ? "ffmpeg-master-latest-macos64-arm64-static.zip"
-            : "ffmpeg-master-latest-macos64-static.zip";
-        string downloadUrl = $"https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/{archiveName}";
+        // Use Martin Riedl's FFmpeg builds which include Apple VideoToolbox hardware acceleration
+        string architecture = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "amd64";
+        string baseUrl = $"https://ffmpeg.martin-riedl.de/download/macos/{architecture}/1756401489_8.0";
 
-        string tempFile = Path.Combine(Path.GetTempPath(), archiveName);
-        if (File.Exists(tempFile))
-        {
-            try
-            {
-                File.Delete(tempFile);
-            }
-            catch
-            {
-                // Non-critical cleanup failure
-            }
-        }
-
-        Console.WriteLine($"  Downloading Apple optimized FFmpeg build: {archiveName}");
+        Console.WriteLine($"  Downloading Apple optimized FFmpeg build with VideoToolbox support for {architecture}...");
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        using var response = await httpClient.GetAsync(downloadUrl);
-        response.EnsureSuccessStatusCode();
 
-        await using (var fileStream = File.Create(tempFile))
+        // Download ffmpeg
+        string ffmpegUrl = $"{baseUrl}/ffmpeg.zip";
+        string ffmpegTempFile = Path.Combine(Path.GetTempPath(), $"ffmpeg-{architecture}.zip");
+
+        Console.WriteLine("  Downloading ffmpeg binary...");
+        using var ffmpegResponse = await httpClient.GetAsync(ffmpegUrl);
+        ffmpegResponse.EnsureSuccessStatusCode();
+
+        await using (var fileStream = File.Create(ffmpegTempFile))
         {
-            await response.Content.CopyToAsync(fileStream);
+            await ffmpegResponse.Content.CopyToAsync(fileStream);
         }
 
-        Console.WriteLine("  Extracting FFmpeg archive...");
-        ZipFile.ExtractToDirectory(tempFile, ffmpegBaseDir, true);
+        // Download ffprobe
+        string ffprobeUrl = $"{baseUrl}/ffprobe.zip";
+        string ffprobeTempFile = Path.Combine(Path.GetTempPath(), $"ffprobe-{architecture}.zip");
 
+        Console.WriteLine("  Downloading ffprobe binary...");
+        using var ffprobeResponse = await httpClient.GetAsync(ffprobeUrl);
+        ffprobeResponse.EnsureSuccessStatusCode();
+
+        await using (var fileStream = File.Create(ffprobeTempFile))
+        {
+            await ffprobeResponse.Content.CopyToAsync(fileStream);
+        }
+
+        Console.WriteLine("  Extracting FFmpeg binaries...");
+        ZipFile.ExtractToDirectory(ffmpegTempFile, ffmpegBaseDir, true);
+        ZipFile.ExtractToDirectory(ffprobeTempFile, ffmpegBaseDir, true);
+
+        // Cleanup temp files
         try
         {
-            File.Delete(tempFile);
+            File.Delete(ffmpegTempFile);
+            File.Delete(ffprobeTempFile);
         }
         catch
         {
-            // Ignore extraction cleanup failures
+            // Ignore cleanup failures
         }
     }
 
@@ -433,12 +441,16 @@ public class EmbeddedFFmpegRunner
 
     private static async Task<bool> RunVideoToolboxConversion(IMediaInfo mediaInfo, string inputPath, string outputPath, UserSettings settings, EncodingSettings encodingSettings, CodecParams codecParams, (int width, int height) scaleSize)
     {
-        var conversion = CreateConversion(mediaInfo, outputPath);
+        var conversion = FFmpeg.Conversions.New()
+            .AddStream(mediaInfo.VideoStreams.ToArray())
+            .AddStream(mediaInfo.AudioStreams.ToArray())
+            .SetOutput(outputPath)
+            .SetOverwriteOutput(true);
 
+        // For Apple VideoToolbox encoding, we don't need -hwaccel (that's for decoding)
+        // We just use the hardware encoders directly
         var args = new List<string>
         {
-            "-hwaccel", "videotoolbox",
-            "-allow_sw", "1",
             "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
             "-c:v", GetVideoToolboxCodecName(settings.Codec),
             "-q:v", $"{encodingSettings.VtQuality ?? 55}",

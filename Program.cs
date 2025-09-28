@@ -395,7 +395,7 @@ class Program
         Console.WriteLine("  PPTcrunch *.pptx                     # Process all PowerPoint files");
         Console.WriteLine("  PPTcrunch *.mov                      # Process all .mov video files");
         Console.WriteLine("  PPTcrunch *.*                        # Process all supported files");
-        Console.WriteLine("  PPTcrunch capture                    # Record from USB video capture to disk (no transcoding)");
+        Console.WriteLine("  PPTcrunch capture                    # Record from USB capture (direct or transcode)");
         Console.WriteLine();
         Console.WriteLine("Output:");
         Console.WriteLine("  - PPTX files: Creates new file with '-shrunk' suffix");

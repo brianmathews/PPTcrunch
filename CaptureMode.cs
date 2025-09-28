@@ -34,8 +34,8 @@ public static class CaptureMode
             return 1;
         }
 
-        Console.WriteLine("\n\nUSB Capture - Direct to Disk");
-        Console.WriteLine("============================\n\n");
+        Console.WriteLine("\n\nUSB Capture");
+        Console.WriteLine("============\n\n");
 
         // Ensure embedded FFmpeg is initialized and get its path
         string? ffmpegExe = await EmbeddedFFmpegRunner.GetFFmpegExecutablePathAsync();
@@ -197,16 +197,103 @@ public static class CaptureMode
         };
         Console.WriteLine($"Selected mode : {selectedMode.Label}\n");
 
-        // 3) Prompt for output filename
+        // 3) Choose recording mode (direct copy/lossless vs live transcode)
+        Console.WriteLine("Choose recording mode:");
+        Console.WriteLine("  1. Direct storage (no transcoding): copy MJPEG or lossless FFV1");
+        Console.WriteLine("  2. Transcode while recording (H.264/H.265)\n");
+        Console.Write("Enter your choice (1-2, default: 1): ");
+        string? modeInput = Console.ReadLine();
+        bool liveTranscode = false;
+        if (!string.IsNullOrWhiteSpace(modeInput) && int.TryParse(modeInput, out int modeChoice))
+        {
+            liveTranscode = modeChoice == 2;
+        }
+
+        // 4) If transcoding, collect codec/quality/GPU/resolution preferences (realtime-safe presets)
+        var settings = new UserSettings();
+        if (liveTranscode)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Live Transcode Settings");
+            Console.WriteLine("-----------------------");
+
+            // Detect GPU capabilities
+            var gpuInfo = await GPUDetectionService.DetectGPUCapabilitiesAsync();
+            if (gpuInfo.SupportsHardwareAcceleration)
+            {
+                string hardwarePrompt = gpuInfo.HardwareAcceleration switch
+                {
+                    HardwareAccelerationMode.NvidiaNvenc => "Use NVIDIA NVENC hardware acceleration for faster real-time encoding?",
+                    HardwareAccelerationMode.AppleVideoToolbox => "Use Apple VideoToolbox hardware acceleration for faster real-time encoding?",
+                    _ => "Use hardware acceleration for faster real-time encoding?"
+                };
+                Console.Write($"{hardwarePrompt} (Y/n, default: Y): ");
+                string? gpuInput = Console.ReadLine()?.Trim().ToLowerInvariant();
+                settings.UseGPUAcceleration = string.IsNullOrEmpty(gpuInput) || gpuInput == "y" || gpuInput == "yes";
+                settings.HardwareAcceleration = settings.UseGPUAcceleration ? gpuInfo.HardwareAcceleration : HardwareAccelerationMode.None;
+            }
+            else
+            {
+                settings.UseGPUAcceleration = false;
+                settings.HardwareAcceleration = HardwareAccelerationMode.None;
+                Console.WriteLine("Hardware acceleration not available - will use CPU (optimize for real-time)");
+            }
+
+            // Codec preference
+            Console.WriteLine();
+            Console.WriteLine("Video codec options:");
+            Console.WriteLine("  1. H.264 (better compatibility)");
+            Console.WriteLine("  2. H.265 (smaller files, more CPU/GPU cost)");
+            if (settings.UseGPUAcceleration && !gpuInfo.SupportsH265)
+            {
+                Console.WriteLine("     Note: Your hardware encoder doesn't support H.265 - H.264 will be used if selected");
+            }
+            Console.Write("Enter your choice (1 or 2, default: 2): ");
+            string? codecInput = Console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(codecInput) && int.TryParse(codecInput, out int codecChoice))
+            {
+                if (codecChoice == 1) settings.Codec = VideoCodec.H264;
+                else if (codecChoice == 2)
+                {
+                    if (settings.UseGPUAcceleration && !gpuInfo.SupportsH265) settings.Codec = VideoCodec.H264;
+                    else settings.Codec = VideoCodec.H265;
+                }
+            }
+
+            // Quality level (maps to CRF/CQ/Q)
+            Console.WriteLine();
+            Console.WriteLine("Quality level options:");
+            var qcfg = QualityConfigService.GetConfig();
+            foreach (var kvp in qcfg.QualityLevels.OrderBy(x => int.Parse(x.Key)))
+            {
+                Console.WriteLine($"  {kvp.Key}. {kvp.Value.Name}");
+            }
+            Console.Write("Enter your choice (1-3, default: 2): ");
+            string? qInput = Console.ReadLine()?.Trim();
+            if (!string.IsNullOrEmpty(qInput) && int.TryParse(qInput, out int qLevel) && qLevel >= 1 && qLevel <= 3)
+            {
+                settings.QualityLevel = qLevel;
+            }
+
+            // Optional downscale for real-time headroom
+            Console.WriteLine();
+            Console.Write($"Limit width to 1920 for smoother real-time encoding? (Y/n, default: Y): ");
+            string? resLimitInput = Console.ReadLine()?.Trim().ToLowerInvariant();
+            settings.ReduceHighResTo1920 = string.IsNullOrEmpty(resLimitInput) || resLimitInput == "y" || resLimitInput == "yes";
+            settings.MaxWidth = settings.ReduceHighResTo1920 ? 1920 : int.MaxValue;
+        }
+
+        // 5) Prompt for output filename
         string ts = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-        string suggested = $"{ts}_{selectedMode.Width}x{selectedMode.Height}@{selectedMode.Fps}.mkv";
+        string baseName = $"{ts}_{selectedMode.Width}x{selectedMode.Height}@{selectedMode.Fps}";
+        string suggested = liveTranscode ? ($"{baseName}.mp4") : ($"{baseName}.mkv");
         Console.WriteLine($"Suggested filename: {suggested}");
         Console.Write("Output filename (ENTER to accept): ");
         string? outName = Console.ReadLine();
         if (string.IsNullOrWhiteSpace(outName)) outName = suggested;
-        if (string.IsNullOrWhiteSpace(Path.GetExtension(outName))) outName += ".mkv";
+        if (string.IsNullOrWhiteSpace(Path.GetExtension(outName))) outName += liveTranscode ? ".mp4" : ".mkv";
 
-        // 4) Build ffmpeg command
+        // 6) Build ffmpeg command
         var inputArgs = new StringBuilder();
         inputArgs.Append("-hide_banner -f dshow -rtbufsize 512M ");
         inputArgs.Append($"-video_size {selectedMode.Width}x{selectedMode.Height} ");
@@ -214,9 +301,61 @@ public static class CaptureMode
         inputArgs.Append($"-vcodec {selectedMode.Format} ");
         inputArgs.Append($"-i video=\"{selectedDevice}\" ");
 
-        string vopts = string.Equals(selectedMode.Format, "mjpeg", StringComparison.OrdinalIgnoreCase)
-            ? "-c:v copy -fps_mode passthrough"
-            : "-pix_fmt yuv422p -c:v ffv1 -level 3 -g 1";
+        string vopts;
+        if (!liveTranscode)
+        {
+            vopts = string.Equals(selectedMode.Format, "mjpeg", StringComparison.OrdinalIgnoreCase)
+                ? "-c:v copy -fps_mode passthrough"
+                : "-pix_fmt yuv422p -c:v ffv1 -level 3 -g 1";
+        }
+        else
+        {
+            // Build real-time transcode options from settings
+            var enc = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
+            var cparams = QualityConfigService.GetCodecParams(settings.Codec, settings.UseGPUAcceleration);
+
+            string scaleFilter = settings.MaxWidth == int.MaxValue
+                ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+                : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
+
+            var sb = new StringBuilder();
+            sb.Append($"-vf \"{scaleFilter}\" ");
+
+            if (settings.UseGPUAcceleration)
+            {
+                // NVENC/VideoToolbox real-time tuned
+                sb.Append($"-c:v {settings.GetGpuCodecName()} ");
+                if (!string.IsNullOrEmpty(enc.Rc)) sb.Append($"-rc {enc.Rc} ");
+                if (enc.Cq.HasValue) sb.Append($"-cq {enc.Cq.Value} ");
+                sb.Append("-b:v 0 ");
+                // Prefer faster preset for real-time than offline defaults
+                string realtimePreset = string.IsNullOrEmpty(enc.Preset) ? "medium" : (enc.Preset == "slow" ? "medium" : enc.Preset);
+                sb.Append($"-preset {realtimePreset} ");
+                if (!string.IsNullOrEmpty(enc.Tune)) sb.Append($"-tune {enc.Tune} ");
+                if (enc.Multipass.HasValue) sb.Append($"-multipass {enc.Multipass.Value} ");
+                if (!string.IsNullOrEmpty(cparams.Profile)) sb.Append($"-profile:v {cparams.Profile} ");
+                if (cparams.Bf.HasValue) sb.Append($"-bf {cparams.Bf.Value} ");
+                if (cparams.Refs.HasValue) sb.Append($"-refs {cparams.Refs.Value} ");
+                if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(cparams.Tag)) sb.Append($"-tag:v {cparams.Tag} ");
+                sb.Append("-pix_fmt yuv420p ");
+            }
+            else
+            {
+                // CPU real-time tuned (use faster presets)
+                sb.Append($"-c:v {settings.GetCpuCodecName()} ");
+                if (enc.Crf.HasValue) sb.Append($"-crf {enc.Crf.Value} ");
+                string cpuPreset = settings.Codec == VideoCodec.H265 ? "faster" : "veryfast";
+                sb.Append($"-preset {cpuPreset} ");
+                if (!string.IsNullOrEmpty(cparams.Profile)) sb.Append($"-profile:v {cparams.Profile} ");
+                if (cparams.Bf.HasValue) sb.Append($"-bf {cparams.Bf.Value} ");
+                if (cparams.Refs.HasValue) sb.Append($"-refs {cparams.Refs.Value} ");
+                if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(cparams.Tag)) sb.Append($"-tag:v {cparams.Tag} ");
+            }
+
+            // Audio copy if present; optimize for MP4 playback
+            sb.Append("-c:a copy -movflags +faststart -y -stats");
+            vopts = sb.ToString();
+        }
 
         Console.WriteLine();
         Console.WriteLine("==============================================================");

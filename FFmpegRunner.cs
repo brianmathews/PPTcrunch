@@ -5,14 +5,27 @@ namespace PPTcrunch;
 
 public class FFmpegRunner
 {
-    private const int TimeoutMinutes = 60; // minutes timeout per video
+    private const int TimeoutMinutes = 60; // minutes timeout per encoding pass
 
     public static async Task<bool> CompressVideoAsync(string inputPath, string outputPath, UserSettings settings)
     {
-        // Check if GPU acceleration is preferred and available
-        if (settings.UseGPUAcceleration)
+        double? inputRate = null;
+        if (settings.ReduceHighFrameRates)
         {
-            bool gpuSuccess = await TryCompressWithGPU(inputPath, outputPath, settings);
+            try { inputRate = await FrameRatePolicy.ReadAsync(inputPath, "ffprobe"); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Frame-rate inspection failed: {ex.Message}");
+                return false;
+            }
+            double? targetRate = FrameRatePolicy.TargetRate(settings, inputRate);
+            if (targetRate.HasValue)
+                Console.WriteLine($"Reducing video from {inputRate:0.###} FPS to {targetRate:0.###} FPS.");
+        }
+        // Check if GPU acceleration is preferred and available
+        if (settings.EffectiveHardwareAcceleration != HardwareAccelerationMode.None)
+        {
+            bool gpuSuccess = await TryCompressWithGPU(inputPath, outputPath, settings, inputRate);
             if (gpuSuccess)
             {
                 return true;
@@ -21,12 +34,12 @@ public class FFmpegRunner
             Console.WriteLine("GPU compression failed, falling back to CPU compression...");
         }
 
-        return await TryCompressWithCPU(inputPath, outputPath, settings);
+        return await TryCompressWithCPU(inputPath, outputPath, settings, inputRate);
     }
 
-    private static async Task<bool> TryCompressWithGPU(string inputPath, string outputPath, UserSettings settings)
+    private static async Task<bool> TryCompressWithGPU(string inputPath, string outputPath, UserSettings settings, double? inputRate)
     {
-        string arguments = BuildFFmpegArgumentsGPU(inputPath, outputPath, settings);
+        string arguments = BuildArguments(inputPath, outputPath, settings, settings.EffectiveHardwareAcceleration, inputRate);
 
         string hardwareLabel = settings.HardwareAcceleration switch
         {
@@ -62,10 +75,28 @@ public class FFmpegRunner
         return result;
     }
 
-    private static async Task<bool> TryCompressWithCPU(string inputPath, string outputPath, UserSettings settings)
+    private static async Task<bool> TryCompressWithCPU(string inputPath, string outputPath, UserSettings settings, double? inputRate)
     {
+        if (settings.Codec == VideoCodec.VP9 && settings.UseVp9TwoPass)
+        {
+            try
+            {
+                return await Vp9TwoPassEncoder.RunAsync(inputPath, outputPath, settings,
+                    EncodingArguments.Build(settings, HardwareAccelerationMode.None, inputFrameRate: inputRate), async (label, options, destination) =>
+                    {
+                        string command = $"-nostdin -i \"{inputPath}\" {string.Join(" ", options)} \"{destination}\"";
+                        Console.WriteLine($"{label}\nffmpeg {command}");
+                        return await RunFFmpegProcess(command);
+                    });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"VP9 compression error: {ex.Message}");
+                return false;
+            }
+        }
         // Build the FFmpeg command with CPU encoding
-        string arguments = BuildFFmpegArgumentsCPU(inputPath, outputPath, settings);
+        string arguments = BuildArguments(inputPath, outputPath, settings, HardwareAccelerationMode.None, inputRate);
 
         Console.WriteLine($"Running CPU compression with command:");
         Console.WriteLine($"ffmpeg {arguments}");
@@ -118,6 +149,8 @@ public class FFmpegRunner
                 try
                 {
                     process.Kill(true);
+                    await process.WaitForExitAsync();
+                    await Task.WhenAll(outputTask, errorTask);
                 }
                 catch (Exception ex)
                 {
@@ -148,203 +181,8 @@ public class FFmpegRunner
         }
     }
 
-    private static string BuildFFmpegArgumentsGPU(string inputPath, string outputPath, UserSettings settings)
-    {
-        if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)
-        {
-            return BuildFFmpegArgumentsVideoToolbox(inputPath, outputPath, settings);
-        }
-
-        // Use NVIDIA GPU acceleration for faster encoding
-        var args = new StringBuilder();
-
-        // Input file
-        args.Append($"-i \"{inputPath}\" ");
-
-        // Video filters: improved single-step scaling that only downscales, never upscales
-        string scaleFilter = settings.MaxWidth == int.MaxValue
-            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-            : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
-        args.Append($"-vf \"{scaleFilter}\" ");
-
-        // Video codec settings - NVIDIA NVENC
-        args.Append($"-c:v {settings.GetGpuCodecName()} ");
-
-        // Get quality settings from config
-        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
-        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
-
-        // Apply quality settings for true constant quality mode
-        if (!string.IsNullOrEmpty(encodingSettings.Rc))
-        {
-            args.Append($"-rc {encodingSettings.Rc} ");
-        }
-
-        if (encodingSettings.Cq.HasValue)
-        {
-            args.Append($"-cq {encodingSettings.Cq.Value} ");
-        }
-
-        // Use -b:v 0 for true constant quality without bitrate limitations
-        args.Append("-b:v 0 ");
-
-        if (!string.IsNullOrEmpty(encodingSettings.Preset))
-        {
-            args.Append($"-preset {encodingSettings.Preset} ");
-        }
-
-        // Apply modern quality enhancement parameters
-        if (!string.IsNullOrEmpty(encodingSettings.Tune))
-        {
-            args.Append($"-tune {encodingSettings.Tune} ");
-        }
-
-        if (encodingSettings.Multipass.HasValue)
-        {
-            args.Append($"-multipass {encodingSettings.Multipass.Value} ");
-        }
-
-        // Apply codec-specific parameters
-        if (!string.IsNullOrEmpty(codecParams.Profile))
-        {
-            args.Append($"-profile:v {codecParams.Profile} ");
-        }
-
-        if (codecParams.Bf.HasValue)
-        {
-            args.Append($"-bf {codecParams.Bf.Value} ");
-        }
-
-        if (codecParams.Refs.HasValue)
-        {
-            args.Append($"-refs {codecParams.Refs.Value} ");
-        }
-
-        // Add H.265 cross-platform compatibility tag
-        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-        {
-            args.Append($"-tag:v {codecParams.Tag} ");
-        }
-
-        // Audio settings (copy if exists, otherwise ignore)
-        args.Append("-c:a copy ");
-
-        // Overwrite output file without prompting
-        args.Append("-y ");
-
-        // Reduce verbosity but keep essential info
-        args.Append("-stats ");
-
-        // Output file
-        args.Append($"\"{outputPath}\"");
-
-        return args.ToString();
-    }
-
-    private static string BuildFFmpegArgumentsVideoToolbox(string inputPath, string outputPath, UserSettings settings)
-    {
-        var args = new StringBuilder();
-
-        args.Append($"-i \"{inputPath}\" ");
-
-        string scaleFilter = settings.MaxWidth == int.MaxValue
-            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-            : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
-        args.Append("-hwaccel videotoolbox -allow_sw 1 ");
-        args.Append($"-vf \"{scaleFilter}\" ");
-
-        args.Append($"-c:v {settings.GetGpuCodecName()} ");
-
-        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
-        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
-
-        int qualityValue = encodingSettings.VtQuality ?? 55;
-        args.Append($"-q:v {qualityValue} ");
-        args.Append("-b:v 0 ");
-        args.Append("-pix_fmt yuv420p ");
-
-        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-        {
-            args.Append($"-tag:v {codecParams.Tag} ");
-        }
-
-        args.Append("-c:a copy ");
-        args.Append("-y ");
-        args.Append("-stats ");
-        args.Append($"\"{outputPath}\"");
-
-        return args.ToString();
-    }
-
-    private static string BuildFFmpegArgumentsCPU(string inputPath, string outputPath, UserSettings settings)
-    {
-        // Use CPU encoding as fallback
-        var args = new StringBuilder();
-
-        // Input file
-        args.Append($"-i \"{inputPath}\" ");
-
-        // Video filters: scale down only if needed, maintain aspect ratio, ensure even dimensions
-        string scaleFilter = settings.MaxWidth == int.MaxValue
-            ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-            : $"scale='min({settings.MaxWidth},iw):-1',scale=trunc(iw/2)*2:trunc(ih/2)*2";
-        args.Append($"-vf \"{scaleFilter}\" ");
-
-        // Video codec settings
-        args.Append($"-c:v {settings.GetCpuCodecName()} ");
-
-        // Get quality settings from config
-        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, false);
-        var codecParams = QualityConfigService.GetCodecParams(settings.Codec, false);
-
-        // Apply quality settings
-        if (encodingSettings.Crf.HasValue)
-        {
-            args.Append($"-crf {encodingSettings.Crf.Value} ");
-        }
-
-        if (!string.IsNullOrEmpty(encodingSettings.Preset))
-        {
-            args.Append($"-preset {encodingSettings.Preset} ");
-        }
-
-        // Apply codec-specific parameters
-        if (!string.IsNullOrEmpty(codecParams.Profile))
-        {
-            args.Append($"-profile:v {codecParams.Profile} ");
-        }
-
-        if (codecParams.Bf.HasValue)
-        {
-            args.Append($"-bf {codecParams.Bf.Value} ");
-        }
-
-        if (codecParams.Refs.HasValue)
-        {
-            args.Append($"-refs {codecParams.Refs.Value} ");
-        }
-
-        // Add H.265 cross-platform compatibility tag
-        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-        {
-            args.Append($"-tag:v {codecParams.Tag} ");
-        }
-
-        // Audio settings (copy if exists, otherwise ignore)
-        args.Append("-c:a copy ");
-
-        // Overwrite output file without prompting
-        args.Append("-y ");
-
-        // Reduce verbosity but keep essential info
-        args.Append("-stats ");
-
-        // Output file
-        args.Append($"\"{outputPath}\"");
-
-        return args.ToString();
-    }
-
+    private static string BuildArguments(string inputPath, string outputPath, UserSettings settings, HardwareAccelerationMode hardware, double? inputRate)
+        => $"-nostdin -i \"{inputPath}\" {string.Join(" ", EncodingArguments.Build(settings, hardware, inputFrameRate: inputRate))} \"{outputPath}\"";
     private static async Task ReadStreamAsync(StreamReader reader, string streamType)
     {
         try

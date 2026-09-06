@@ -1,6 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace PPTcrunch;
@@ -8,8 +5,6 @@ namespace PPTcrunch;
 public class QualityConfigService
 {
     private static QualityConfig? _config;
-    private static bool _driverVersionChecked = false;
-    private static bool _supportsVbrHq = false;
 
     public static QualityConfig GetConfig()
     {
@@ -22,91 +17,97 @@ public class QualityConfigService
 
     private static QualityConfig CreateHardcodedConfig()
     {
-        // Check NVIDIA driver capabilities once for advanced features
-        if (!_driverVersionChecked)
-        {
-            _supportsVbrHq = CheckNvidiaDriverSupportsVbrHq();
-            _driverVersionChecked = true;
-        }
-
-        // Use modern vbr rate control with tune and multipass for advanced features
-        string rcMode = "vbr";
-        string tuneMode = _supportsVbrHq ? "hq" : "";
-        int? multipassValue = _supportsVbrHq ? 2 : null;
-
         return new QualityConfig
         {
             QualityLevels = new Dictionary<string, QualityLevel>
             {
                 ["1"] = new QualityLevel
                 {
-                    Name = "Smallest file with passable quality",
+                    Name = "Good - smaller files",
                     H264 = new CodecSettings
                     {
-                        CPU = new EncodingSettings { Crf = 26, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, VtQuality = 68, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        CPU = new EncodingSettings { Crf = 26, Preset = "slow" },
+                        GPU = NvencSettings(29, 50)
                     },
                     H265 = new CodecSettings
                     {
-                        CPU = new EncodingSettings { Crf = 25, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 28, VtQuality = 62, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
-                    }
+                        CPU = new EncodingSettings { Crf = 28, Preset = "slow" },
+                        GPU = NvencSettings(28, 50)
+                    },
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 34, CpuUsed = 2 } }
                 },
                 ["2"] = new QualityLevel
                 {
-                    Name = "Balanced with good quality",
+                    Name = "Better - balanced quality and file size",
                     H264 = new CodecSettings
                     {
-                        CPU = new EncodingSettings { Crf = 22, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 22, VtQuality = 55, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        CPU = new EncodingSettings { Crf = 22, Preset = "slow" },
+                        GPU = NvencSettings(26, 65)
                     },
                     H265 = new CodecSettings
                     {
-                        CPU = new EncodingSettings { Crf = 24, Preset = "medium" },
-                        GPU = new EncodingSettings { Cq = 26, VtQuality = 50, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
-                    }
+                        CPU = new EncodingSettings { Crf = 24, Preset = "slow" },
+                        GPU = NvencSettings(26, 65)
+                    },
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 30, CpuUsed = 2 } }
                 },
                 ["3"] = new QualityLevel
                 {
-                    Name = "Quality indistinguishable from source, bigger file",
+                    Name = "Indistinguishable in normal playback (target; lossy)",
                     H264 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 20, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 20, VtQuality = 45, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
+                        GPU = NvencSettings(23, 75)
                     },
                     H265 = new CodecSettings
                     {
                         CPU = new EncodingSettings { Crf = 22, Preset = "slow" },
-                        GPU = new EncodingSettings { Cq = 23, VtQuality = 42, Preset = "slow", Rc = rcMode, Tune = tuneMode, Multipass = multipassValue }
-                    }
+                        GPU = NvencSettings(23, 75)
+                    },
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 28, CpuUsed = 2 } }
+                },
+                ["4"] = new QualityLevel
+                {
+                    Name = "Archive mode - extra detail for later recompression (lossy)",
+                    H264 = new CodecSettings
+                    {
+                        CPU = new EncodingSettings { Crf = 18, Preset = "slow" },
+                        GPU = NvencSettings(20, 85)
+                    },
+                    H265 = new CodecSettings
+                    {
+                        CPU = new EncodingSettings { Crf = 20, Preset = "slow" },
+                        GPU = NvencSettings(20, 85)
+                    },
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 24, CpuUsed = 2 } }
                 }
             },
             CodecSettings = new CodecSettingsConfig
             {
                 H264 = new CodecSpecificSettings
                 {
-                    GPU = new CodecParams { Profile = "high", Bf = 3, Refs = 4 },
+                    GPU = new CodecParams { Profile = "high", Bf = 3 },
                     CPU = new CodecParams { Profile = "high" }
                 },
                 H265 = new CodecSpecificSettings
                 {
-                    GPU = new CodecParams { Profile = "main", Bf = 3, Refs = 3, Tag = "hvc1" },
+                    // Let the HEVC hardware preset select B/ reference frames: older NVENC
+                    // generations cannot encode HEVC B-frames at all.
+                    GPU = new CodecParams { Profile = "main", Tag = "hvc1" },
                     CPU = new CodecParams { Profile = "main", Tag = "hvc1" }
-                }
+                },
+                VP9 = new CodecSpecificSettings { CPU = new CodecParams { Profile = "0" } }
             }
         };
     }
 
-    private static bool CheckNvidiaDriverSupportsVbrHq()
+    // P6 stops short of the most expensive P7 preset. Quality scales are encoder-specific;
+    // these are targets, not measured equivalence or a guarantee of visual transparency.
+    private static EncodingSettings NvencSettings(int cq, int vtQuality) => new()
     {
-        // For embedded FFmpeg distribution, we'll use conservative settings
-        // to ensure maximum compatibility across different systems
-        // Most modern systems with NVENC support will have recent enough drivers
-        // but we'll default to basic vbr mode for reliability
-
-        Console.WriteLine("  Using standard vbr mode for maximum compatibility");
-        return false;
-    }
+        Cq = cq, VtQuality = vtQuality, Preset = "p6", Rc = "vbr", Tune = "hq",
+        Multipass = 1, Lookahead = 32
+    };
 
     /// <summary>
     /// Determines GPU capabilities based on GPU name/model using simplified generation detection
@@ -174,7 +175,7 @@ public class QualityConfigService
             if (gpuName.Contains("RTX"))
                 return 2080; // Titan RTX ~ RTX 2080 generation
             if (gpuName.Contains("V"))
-                return 1080; // Titan V ~ GTX 1080 generation  
+                return 1080; // Titan V ~ GTX 1080 generation
             if (gpuName.Contains("X"))
                 return 1080; // Titan X ~ GTX 1080 generation
         }
@@ -199,16 +200,28 @@ public class QualityConfigService
             level = config.QualityLevels[levelKey];
         }
 
-        var codecSettings = codec == VideoCodec.H264 ? level.H264 : level.H265;
+        var codecSettings = codec switch
+        {
+            VideoCodec.H264 => level.H264,
+            VideoCodec.H265 => level.H265,
+            VideoCodec.VP9 => level.VP9,
+            _ => throw new ArgumentOutOfRangeException(nameof(codec))
+        };
+        if (codec == VideoCodec.VP9) return codecSettings.CPU;
         return useGPU ? codecSettings.GPU : codecSettings.CPU;
     }
 
     public static CodecParams GetCodecParams(VideoCodec codec, bool useGPU)
     {
         var config = GetConfig();
-        var codecSettings = codec == VideoCodec.H264 ?
-            config.CodecSettings.H264 :
-            config.CodecSettings.H265;
+        var codecSettings = codec switch
+        {
+            VideoCodec.H264 => config.CodecSettings.H264,
+            VideoCodec.H265 => config.CodecSettings.H265,
+            VideoCodec.VP9 => config.CodecSettings.VP9,
+            _ => throw new ArgumentOutOfRangeException(nameof(codec))
+        };
+        if (codec == VideoCodec.VP9) return codecSettings.CPU;
 
         return useGPU ? codecSettings.GPU : codecSettings.CPU;
     }
@@ -227,6 +240,7 @@ public class QualityLevel
     public string Name { get; set; } = string.Empty;
     public CodecSettings H264 { get; set; } = new();
     public CodecSettings H265 { get; set; } = new();
+    public CodecSettings VP9 { get; set; } = new();
 }
 
 public class CodecSettings
@@ -244,12 +258,15 @@ public class EncodingSettings
     public string Rc { get; set; } = string.Empty;
     public string Tune { get; set; } = string.Empty;
     public int? Multipass { get; set; }
+    public int? Lookahead { get; set; }
+    public int? CpuUsed { get; set; }
 }
 
 public class CodecSettingsConfig
 {
     public CodecSpecificSettings H264 { get; set; } = new();
     public CodecSpecificSettings H265 { get; set; } = new();
+    public CodecSpecificSettings VP9 { get; set; } = new();
 }
 
 public class CodecSpecificSettings

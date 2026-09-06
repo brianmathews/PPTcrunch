@@ -95,7 +95,7 @@ public static class FileManager
                 string targetPath = Path.Combine(mediaDir, finalFileName);
                 File.Copy(newTempPath, targetPath, true);
 
-                if (result.WasCompressed && result.FileSizeReduced)
+                if (result.WasCompressed)
                 {
                     Console.WriteLine($"  Replaced with compressed: {originalFileName} -> {finalFileName} ({result.CompressionMethod})");
                 }

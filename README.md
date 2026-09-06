@@ -1,6 +1,6 @@
 # PPTcrunch - PowerPoint & Video Compressor
 
-PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg with GPU acceleration. It supports both PowerPoint (.pptx) files with embedded videos AND individual video files, with wildcard support for batch processing.
+PPTcrunch is a .NET 8 console application that compresses videos using quality-based FFmpeg encoding, with optional GPU acceleration. It supports both PowerPoint (.pptx) files with embedded videos AND individual video files, with wildcard support for batch processing.
 
 ## Table of Contents
 
@@ -25,9 +25,9 @@ PPTcrunch is a .NET 8 console application that compresses videos using FFmpeg wi
 
 - **Dual File Support**: Process both PowerPoint (.pptx) files AND individual video files
 - **Wildcard Processing**: Support for wildcards to batch process multiple files (e.g., `*.mov`, `*.pptx`)
-- **Interactive Configuration**: Prompts for hardware acceleration, codec, quality level (1-3), and max width
+- **Interactive Configuration**: Prompts for hardware acceleration, codec, quality level (1-4), and max width
 - **Hardware Acceleration**: Uses NVIDIA NVENC on Windows and Apple VideoToolbox on macOS with CPU fallback
-- **Smart Compression**: Only keeps compressed videos if they're actually smaller than originals
+- **Smart Compression**: Keeps smaller MP4/PPTX media; explicit WebM and archive exports are retained even when larger
 - **Flexible Settings**: Customizable video resolution, codec choice, and quality levels
 - **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv and more
 - **Intelligent Naming**: Video files get descriptive suffixes with quality and codec info
@@ -176,7 +176,7 @@ The program will prompt you for compression settings:
 Video Compression Settings
 ==========================
 
-Use GPU acceleration for faster encoding? (Y/n, default: Y): Y
+Use GPU acceleration for faster encoding? (y/N, default: N): N
 
 Video codec options:
   1. H.264 (better compatibility, works on older systems)
@@ -184,15 +184,16 @@ Video codec options:
 Enter your choice (1 or 2, default: 2): 2
 
 Quality level options:
-  1. Smallest file with passable quality
-  2. Balanced with good quality (recommended)
-  3. Quality indistinguishable from source, bigger file
-Enter your choice (1-3, default: 2): 2
+  1. Good - smaller files
+  2. Better - balanced quality and file size
+  3. Indistinguishable in normal playback (target; lossy)
+  4. Archive mode - extra detail for later recompression (lossy)
+Enter your choice (1-4, default: 2): 2
 
 Reduce high-resolution videos to maximum 1920 pixels wide (2K HD)? (Y/n, default: Y): Y
 
 Selected settings:
-  GPU acceleration: Yes
+  GPU acceleration: No
   Video codec: H.265 (smaller files, newer standard, may not work on older systems)
   Quality level: Balanced with good quality
   Maximum width: 1920 pixels
@@ -243,7 +244,7 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
 
 1. Compress the video file using your selected settings
 2. Generate a new file with quality and codec information in the filename
-3. Example: `video.mov` → `video - Q22H264.mp4` (Quality 22, H.264 codec)
+3. Example: `video.mov` → `video - L2H264.mp4` (Quality level 2, H.264 codec)
 4. Original file remains unchanged
 
 **For wildcard patterns**, the program will:
@@ -262,30 +263,29 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
   - Videos **wider** than this setting will be downscaled to this width
   - Videos **smaller** than this setting will remain their original size (no upscaling)
   - Aspect ratio is always preserved
-  - **Both width AND height are forced to even numbers** (required by H.264/H.265 encoders)
+  - **Both width AND height are forced to even numbers** (for compatible 4:2:0 output)
 - **Examples**:
   - Set to `1280`: A 1920x1080 video becomes 1280x720, but a 640x480 video stays 640x480
-  - Set to `1920`: A 1921x1080 video becomes 1920x1078 (height adjusted to even number)
+  - Set to `1920`: A 1921x1080 video becomes 1920x1080 (nearest even height)
   - Set to `3840`: Allows up to 4K resolution without downscaling
 
 ### Video Codec
 
-- **Option 1**: H.264 (libx264 CPU / h264_nvenc GPU)
-  - Better compatibility with older devices
-  - Standard compression efficiency
-  - Recommended for general use
-- **Option 2**: H.265 (libx265 CPU / hevc_nvenc GPU)
-  - Better compression (smaller files)
-  - Newer standard, requires modern hardware for playback
-  - Recommended for newer devices and better compression ratios
+- **1: H.264 / MP4**: widest device and PowerPoint compatibility. CPU libx264, NVIDIA NVENC, or Apple VideoToolbox.
+- **2: H.265 / MP4** (default): better compression efficiency; requires HEVC playback support. CPU libx265, NVIDIA NVENC, or Apple VideoToolbox.
+- **3: WebM / VP9**: standalone video exports for modern laptop and phone browsers. CPU libvpx-vp9, Profile 0, 8-bit `yuv420p`, with Opus audio. Compatible Opus/Vorbis audio is copied. NVENC and VideoToolbox do not encode VP9, so selecting WebM always uses the CPU.
+
+WebM defaults to **two-pass encoding** for final website videos. Accept the default at the WebM prompt, then choose your quality level as usual. The first pass analyzes the original; the second reads the original again and writes the final video, so this does not add another lossy generation. One-pass encoding remains available: mostly static clips can be smaller in one pass because two-pass VP9 sometimes allocates extra bits to their detail. Neither mode guarantees the smallest possible file for every clip.
+
+WebM is supported in current Chrome, Edge, Firefox and Safari. iPhone/iPad playback requires iOS/iPadOS 17.4 or later; macOS Safari supports WebM from 14.1. For older devices use H.264. See [WebKit's compatibility announcement](https://webkit.org/blog/15063/webkit-features-in-safari-17-4/).
+
+PowerPoint and mixed PowerPoint/video batches offer MP4 codecs only. Run a separate standalone video batch to choose WebM. A hardware failure falls back to CPU encoding of the **same codec and user quality level**.
 
 ### Quality Level
 
-- **Range**: 18-35 (lower = better quality, larger files)
-- **18-22**: Very high quality (near lossless)
-- **23-28**: High quality (recommended range)
-- **29-35**: Medium quality (smaller files)
-- **Default**: 23 (good balance of quality and file size)
+Choose **1** (good/smaller), **2** (better/balanced, default), **3** (indistinguishable during normal playback, target), or **4** (archive mode for later recompression). All modes target quality and let video bitrate vary with the content. No video bitrate cap or floor is imposed. These are lossy encoder targets, not an objective minimum-quality guarantee; see the [mapping and limitations](#encoding-presets-and-quality-reference).
+
+CPU encoding is now the default because file size at a given quality takes priority over speed. GPU encoding remains available through the hardware prompt. Changing the hardware choice can change file size and visual quality even at the same level.
 
 ## How It Works
 
@@ -298,55 +298,29 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
 
 ## FFmpeg Command Details
 
-The program tries GPU acceleration first, then falls back to CPU if needed:
+The shared `EncodingArguments` builder supplies the same video settings to the bundled and legacy external runners. Representative level-2 options (scaling and stream selection omitted):
 
-**GPU Command Examples:**
+| Encoder | Video options |
+|---|---|
+| H.264 CPU | `-c:v libx264 -crf 22 -preset slow -profile:v high -pix_fmt yuv420p` |
+| H.265 CPU | `-c:v libx265 -crf 24 -preset slow -profile:v main -pix_fmt yuv420p -tag:v hvc1` |
+| H.264 NVENC | `-c:v h264_nvenc -cq 26 -rc vbr -b:v 0 -preset p6 -tune hq -multipass 1 -rc-lookahead 32 -spatial-aq 1 -temporal-aq 1 -bf 3 -profile:v high -pix_fmt yuv420p` |
+| H.265 NVENC | `-c:v hevc_nvenc -cq 26 -rc vbr -b:v 0 -preset p6 -tune hq -multipass 1 -rc-lookahead 32 -spatial-aq 1 -temporal-aq 1 -profile:v main -pix_fmt yuv420p -tag:v hvc1` |
+| H.264 VideoToolbox | `-c:v h264_videotoolbox -q:v 65 -b:v 0 -realtime 0 -allow_sw 0 -profile:v high -pix_fmt yuv420p` |
+| H.265 VideoToolbox | `-c:v hevc_videotoolbox -q:v 65 -b:v 0 -realtime 0 -allow_sw 0 -profile:v main -pix_fmt yuv420p -tag:v hvc1` |
+| VP9 CPU, final pass | `-c:v libvpx-vp9 -crf 30 -b:v 0 -deadline good -cpu-used 2 -row-mt 1 -lag-in-frames 25 -g 240 -profile:v 0 -pix_fmt yuv420p -fps_mode passthrough -pass 2 -passlogfile "<job>/stats"` |
 
-```bash
-# H.264 with user settings (example scale=1280:720, quality level → CQ 22)
-ffmpeg -i "input-orig.mov" -vf "scale=1280:720" -c:v h264_nvenc -cq 22 -b:v 0 -preset slow -profile:v high -rc vbr -c:a copy -y -stats "output.mp4"
+MP4 uses `-movflags +faststart`. The bundled runner copies AAC audio; other audio is converted to AAC at 192 kb/s (64 kb/s per channel above stereo). WebM converts incompatible audio to Opus VBR at 128 kb/s (64 kb/s per channel above stereo), 48 kHz and compression level 10. Existing Opus/Vorbis tracks are copied. The legacy external runner always transcodes audio. Silent inputs work, all audio tracks are retained, and only the first video stream is exported. Audio bitrate targets are separate from the video quality choice.
 
-# H.265 with user settings (example scale=1920:1080, quality level → CQ 26)
-ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v hevc_nvenc -cq 26 -b:v 0 -preset slow -profile:v main -rc vbr -c:a copy -y -stats "output.mp4"
-```
-
-**Apple VideoToolbox Command Examples:**
-
-```bash
-# H.264 hardware quality targeting (example scale=1280:720, quality level → Q 55)
-ffmpeg -i "input-orig.mov" -hwaccel videotoolbox -allow_sw 1 -vf "scale=1280:720" -c:v h264_videotoolbox -q:v 55 -b:v 0 -pix_fmt yuv420p -c:a copy -y -stats "output.mp4"
-
-# H.265 hardware quality targeting (example scale=1920:1080, quality level → Q 50)
-ffmpeg -i "input-orig.mov" -hwaccel videotoolbox -allow_sw 1 -vf "scale=1920:1080" -c:v hevc_videotoolbox -q:v 50 -b:v 0 -pix_fmt yuv420p -tag:v hvc1 -c:a copy -y -stats "output.mp4"
-```
-
-**CPU Command Examples:**
-
-```bash
-# H.264 with user settings (example scale=1280:720, quality level → CRF 22)
-ffmpeg -i "input-orig.mov" -vf "scale=1280:720" -c:v libx264 -crf 22 -preset medium -c:a copy -y -stats "output.mp4"
-
-# H.265 with user settings (example scale=1920:1080, quality level → CRF 24)
-ffmpeg -i "input-orig.mov" -vf "scale=1920:1080" -c:v libx265 -crf 24 -preset medium -c:a copy -y -stats "output.mp4"
-```
-
-Key parameters (dynamically set based on user choices):
-
-- **GPU (Windows)**: `-c:v h264_nvenc` or `-c:v hevc_nvenc` (H.264/H.265 NVENC encoders)
-- **GPU (Windows)**: `-cq` (constant quality) with `-b:v 0` and `-rc vbr` (true CQ mode)
-- **GPU (Windows)**: `-preset slow` and appropriate `-profile:v` per codec
-- **Apple VideoToolbox (macOS)**: `-c:v h264_videotoolbox` or `-c:v hevc_videotoolbox`
-- **Apple VideoToolbox (macOS)**: `-q:v` quality selector with `-b:v 0`, `-pix_fmt yuv420p`, and optional `-tag:v hvc1` for H.265
-- **CPU**: `-c:v libx264` or `-c:v libx265` (H.264/H.265 software encoders)
-- **CPU**: `-crf` per quality level, `-preset medium`
-- `-vf scale=...`: Downscales if needed (no upscaling), maintains aspect ratio, ensures even dimensions
-- `-y`: Overwrites output files without prompting
+Scaling uses Lanczos, avoids upscaling apart from the minimum 2-pixel encoder dimension, and produces even dimensions. The generated FFmpeg command is printed during encoding.
 
 ## Output
 
 - **Original file**: Remains unchanged (serves as backup)
 - **PPTX output**: New file with "-shrunk" suffix
-- **Video output**: New `.mp4` with quality/codec in the name (e.g., `name - Q22H264.mp4`)
+- **Video output**: New `.mp4` or `.webm` with user quality level and codec in the name (e.g., `name - L2H264.mp4`, `name - L2VP9.webm`). `L2` remains accurate after hardware fallback; old `Q...` names are still recognized.
+
+When a standalone video exceeds the selected maximum width, its output name also includes the reduced width: a 4K `foo.mpg` exported at the 1920-pixel limit becomes `foo - L2VP9-1920.webm`. Inputs already at or below that limit keep the usual name. Custom width limits use their resulting even output width in the same suffix. If FPS reduction changes the rate, the new FPS is appended before the extension: `foo - L2VP9-25FPS.webm`, or `foo - L2VP9-1920-25FPS.webm` when both change. Unchanged rates receive no FPS suffix. These names retain the delivery/Archive recompression safeguards.
 - **Temporary files**: Automatically cleaned up after processing
 
 ## Error Handling
@@ -361,12 +335,12 @@ Key parameters (dynamically set based on user choices):
 
 - **Direct video mode (input)**: .mp4, .mpeg4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv
 - **PPTX-embedded videos**: Common media types found in `ppt/media` are processed as extracted files
-- **Output**: All videos are converted to .mp4 format for consistency and smaller file sizes
+- **Output**: H.264/H.265 in MP4, or standalone VP9 in WebM.
 
 ### File Processing Modes
 
 1. **PPTX Mode**: Extracts videos from PowerPoint, compresses them, and repackages into a new PPTX file with `-shrunk` suffix
-2. **Video Mode**: Directly compresses individual video files with quality and codec information in filename (e.g., `video - Q22H264.mp4`)
+2. **Video Mode**: Directly compresses individual video files with quality and codec information in filename (e.g., `video - L2H264.mp4`)
 3. **Batch Mode**: Process multiple files using wildcards (e.g., `*.mov`, `*.pptx`, `*.*`)
 
 ## Requirements
@@ -413,7 +387,7 @@ The program includes several improvements for reliability and performance:
 
 - **Hardware Acceleration**: NVIDIA NVENC (Windows) and Apple VideoToolbox (macOS) provide faster compression when available
 - **Automatic Fallback**: Falls back to CPU encoding if GPU is unavailable
-- **Smart File Size Checking**: Only uses compressed files if they're actually smaller
+- **Smart File Size Checking**: Uses smaller MP4/PPTX media; retains requested WebM or archive output even if larger
 - **Progress Feedback**: Shows real-time FFmpeg output during compression
 - **Improved Scaling**: Ensures even dimensions and preserves aspect ratio
 - **Error Recovery**: Gracefully handles compression failures and keeps original videos
@@ -422,10 +396,10 @@ The program includes several improvements for reliability and performance:
 
 The program uses intelligent decision-making for optimal results:
 
-1. **Hardware First**: Attempts NVIDIA NVENC (Windows) or Apple VideoToolbox (macOS) for faster compression
+1. **CPU by Default**: Uses software encoding for compression efficiency; NVIDIA/Apple hardware is optional
 2. **CPU Fallback**: Falls back to CPU encoding if hardware acceleration fails or is unavailable
 3. **Size Comparison**: Compares compressed file size to original after encoding
-4. **Best Choice**: Keeps whichever file is smaller (compressed or original)
+4. **Output Policy**: MP4/PPTX delivery modes keep the smaller file. WebM and archive exports keep the requested format/quality, even when larger. Originals remain unchanged.
 5. **XML Preservation**: Only updates XML references for files that actually changed extensions
 
 ## Progress Display
@@ -441,119 +415,49 @@ The program provides comprehensive progress information:
 
 ## Encoding Presets and Quality Reference
 
-### FFmpeg Preset Options
+The **Enable frame-rate reduction?** option defaults to **N**, preserving the original frame rate. Selecting **Y** halves even integer rates of at least 48 FPS: 48→24, 50→25, 60→30, 90→45, and 120→60. This is one halving, not a 30 FPS cap. Lower rates (including 40 FPS), odd integer rates (such as 49 or 51), fractional rates (such as 47.952 or 59.94), and unknown rates remain unchanged. This applies to all codecs and CPU/GPU paths, including PowerPoint media and Archive mode. The app inspects each video's average frame rate, falling back to its nominal rate if needed, and does not round fractional rates into even integers.
 
-The program uses different presets for CPU and GPU encoding that balance speed vs quality:
+Reduction uses timestamp-based frame selection at half the input rate before scaling, with the same filter in both VP9 passes. For constant-rate input this retains every other frame evenly, preserving sharp images and playback speed without blending or the uneven selection of 50→30. It still loses half the motion samples, so reduction is optional. Blending can soften or double moving edges; motion-compensated interpolation costs considerably more and can invent artifacts. Changed rates add a suffix such as `-25FPS` to standalone output filenames.
 
-#### CPU Presets (libx264/libx265)
+| Level | H.264 CPU CRF | H.264 NVENC CQ | H.265 CPU CRF | H.265 NVENC CQ | Apple Q (both codecs) | VP9 CRF |
+|---|---:|---:|---:|---:|---:|---:|
+| 1: good/smaller | 26 | 29 | 28 | 28 | 50 | 34 |
+| 2: better/balanced | 22 | 26 | 24 | 26 | 65 | 30 |
+| 3: normal-playback transparency target | 20 | 23 | 22 | 23 | 75 | 28 |
+| 4: archive mode | 18 | 20 | 20 | 20 | 85 | 24 |
 
-| Preset | Speed | Quality | Use Case |
-|--------|-------|---------|----------|
-| ultrafast | ⭐⭐⭐⭐⭐ | ⭐ | Real-time streaming, very fast encoding needed |
-| superfast | ⭐⭐⭐⭐ | ⭐⭐ | Fast encoding with minimal quality loss |
-| veryfast | ⭐⭐⭐ | ⭐⭐⭐ | Good balance for quick processing |
-| faster | ⭐⭐ | ⭐⭐⭐⭐ | Slightly slower but better quality |
-| **medium** | ⭐⭐⭐ | ⭐⭐⭐⭐ | **Default - good balance** |
-| slow | ⭐⭐ | ⭐⭐⭐⭐⭐ | Better quality, longer encoding time |
-| slower | ⭐ | ⭐⭐⭐⭐⭐ | High quality for archival purposes |
-| veryslow | ⭐ | ⭐⭐⭐⭐⭐ | Maximum quality, very slow |
+Lower CRF/CQ means higher quality. **Higher Apple Q means higher quality**. Numbers on different encoders are not interchangeable or calibrated to identical perceived quality. Level 3 targets perceptually transparent animation at normal playback speed, size and viewing distance; it allows differences visible only when paused or magnified. It is not a guarantee for every source. Level 4 retains extra detail for a later delivery encode, rather than trying to improve normal-viewing appearance. Archive mode remains lossy and cannot recover detail already removed from an input. Fine text, motion, grain and gradients can need different settings. Standard outputs are 8-bit 4:2:0; HDR tone mapping, 10-bit preservation, alpha preservation and lossless export are not provided.
 
-#### GPU Presets (NVENC)
+- **CPU H.264/H.265:** use `slow` at every quality level. The preset owns B-frames, reference frames and lookahead. `slower`/`veryslow` are excluded to avoid steep time costs. CRF controls quality; preset changes can affect both fidelity and size, so a slower preset does not invariably produce a smaller file at identical CRF.
+- **NVIDIA H.264/H.265:** explicit P6/HQ, quality-targeted VBR, 32-frame lookahead, spatial and temporal adaptive quantization, and quarter-resolution multipass. This multipass analyzes each frame; it is not a second traversal of the whole video. P7/full-resolution multipass are excluded as default choices. H.264 enables three B-frames. HEVC lets the hardware preset choose supported frame structures rather than forcing HEVC B-frames on older GPUs. Unsupported hardware/options trigger CPU CRF fallback.
+- **Apple H.264/H.265:** ascending Q 50/65/75/85, non-realtime encoding, no bitrate target and no implicit software fallback. Constant-quality VideoToolbox encoding requires Apple silicon; unsupported combinations fall back to CPU CRF. Apple does not expose x264/NVENC-style speed presets or lookahead controls here.
+- **VP9:** two-pass quality mode by default, `good`, first-pass `cpu-used 4` and final-pass `cpu-used 2`, row threading and 25-frame lookahead. Both passes use the same CRF, scaling and original frame timing. Pass one produces statistics only, with audio disabled; pass two handles audio and writes WebM. Each job has its own temporary statistics, cleaned up on success or failure, and an existing export is replaced only after both passes succeed. Each pass has a 60-minute timeout. `best` and speed 0 remain excluded. One-pass mode uses the same quality table and final encoding settings, without pass arguments. The keyframe interval can reach 240 frames, allowing smaller files while still supporting seeking.
 
-| Preset | NVENC Code | Speed | Quality | Use Case |
-|--------|------------|-------|---------|----------|
-| **slow** | p7 | ⭐⭐ | ⭐⭐⭐⭐⭐ | **Default - best quality** |
-| medium | p4 | ⭐⭐⭐ | ⭐⭐⭐⭐ | Good balance of speed/quality |
-| fast | p1 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | Maximum speed encoding |
+[Encoding review and measured tradeoffs](ENCODING_REVIEW.md) records the evidence, limitations and primary references.
 
-> Apple VideoToolbox encoders use quality targeting via `-q:v` instead of presets; recommended values are listed in the quality mapping table below.
+## Validation
 
-### Quality Settings Reference
+```powershell
+# Regression checks (no additional testing packages)
+dotnet run --project tests/PPTcrunch.Tests.csproj -p:SelfContained=false -p:PublishSingleFile=false -p:PublishReadyToRun=false
 
-#### H.264 Quality Levels (CRF for CPU, CQ for GPU)
+# Real FFmpeg encodes and decoded-frame quality checks; omit --nvenc without NVIDIA hardware
+dotnet run --project tests/PPTcrunch.Tests.csproj -p:SelfContained=false -p:PublishSingleFile=false -p:PublishReadyToRun=false -- --integration --nvenc
 
-| Value | Visual Quality | File Size | Human Perception | Recommended Use |
-|-------|----------------|-----------|------------------|-----------------|
-| **18** | Visually lossless | Very Large | Indistinguishable from original | Archival, master copies |
-| **20** | Excellent | Large | Virtually identical to source | High-end production |
-| **22** | Very High | Large | Minor differences only visible under scrutiny | Professional content |
-| **23** | High | Medium-Large | **Recommended default** - excellent quality | **General use** |
-| **25** | Good | Medium | Minor artifacts in complex scenes | Standard compression |
-| **27** | Acceptable | Medium-Small | Noticeable quality loss in detailed areas | Web streaming |
-| **29** | Fair | Small | Visible compression artifacts | Low bandwidth |
-| **32** | Poor | Very Small | Significant quality degradation | Emergency use only |
+# Bounded preset comparisons on a representative local input
+./tests/benchmark-presets.ps1 -InputVideo ./sample.mkv -FFmpeg C:/ffmpeg/ffmpeg.exe -Nvenc
 
-#### H.265 Quality Levels (CRF for CPU, CQ for GPU)
+# VP9 one/two-pass quality curves on the repository's local recordings and a moving pattern
+python tests/benchmark-vp9.py --ffmpeg C:/ffmpeg/ffmpeg.exe
+```
 
-| Value | Visual Quality | File Size | Human Perception | Recommended Use |
-|-------|----------------|-----------|------------------|-----------------|
-| **22** | Visually lossless | Very Large | Indistinguishable from original | Archival, master copies |
-| **24** | Excellent | Large | Virtually identical to source | High-end production |
-| **26** | Very High | Large | Minor differences only visible under scrutiny | Professional content |
-| **28** | High | Medium-Large | **Recommended default** - excellent quality | **General use** |
-| **30** | Good | Medium | Minor artifacts in complex scenes | Standard compression |
-| **32** | Acceptable | Medium-Small | Noticeable quality loss in detailed areas | Web streaming |
-| **34** | Fair | Small | Visible compression artifacts | Low bandwidth |
-| **36** | Poor | Very Small | Significant quality degradation | Emergency use only |
+Integration tests write their generated videos and measurements under `artifacts/encoding-tests`. Benchmarks use the first three seconds, scaled to 1280 pixels wide, and write results under `artifacts/preset-benchmark`. Short samples are useful checks, not universal quality or timing guarantees.
 
-### Quality Level Mapping
-
-The program maps user-friendly quality levels (1-3) to concrete settings:
-
-| User Level | Description | H.264 CPU (CRF) | H.264 NVENC (CQ) | H.264 VideoToolbox (Q) | H.265 CPU (CRF) | H.265 NVENC (CQ) | H.265 VideoToolbox (Q) |
-|------------|-------------|------------------|-------------------|-------------------------|------------------|-------------------|--------------------------|
-| **1** | Smallest file with passable quality | 26 | 26 | 68 | 25 | 28 | 62 |
-| **2** | Balanced with good quality ⭐ | 22 | 22 | 55 | 24 | 26 | 50 |
-| **3** | Quality indistinguishable from source | 20 | 20 | 45 | 22 | 23 | 42 |
-
-Note: CPU CRF, NVENC CQ, and VideoToolbox `-q:v` values are chosen to produce comparable visual quality per codec.
-
-### Hardware Acceleration Benefits
-
-**NVIDIA NVENC (Windows):**
-
-- **Speed**: 5-10x faster encoding compared to CPU
-- **Constant Quality**: Uses `-b:v 0` for true constant quality without bitrate limitations
-- **Efficiency**: Frees up CPU for other tasks during encoding
-- **Quality**: Modern NVENC (Turing/Ampere) approaches software encoder quality
-
-**Apple VideoToolbox (macOS):**
-
-- **Zero-Copy Pipelines**: Utilizes dedicated Apple silicon media engines with minimal CPU overhead
-- **Consistent Quality**: Uses `-q:v` quality targeting with `-b:v 0` for bitrate-free compression control
-- **Broad Compatibility**: Outputs standard `yuv420p` MP4 files (H.264/H.265) with `hvc1` tagging for HEVC playback
-- **Optional Hardware Decode**: `-hwaccel videotoolbox` reduces decoding cost when transcoding high-resolution sources
-
-### Advanced Configuration
-
-**Quality settings are automatically optimized** for your hardware and don't require manual configuration. The program uses these built-in settings:
-
-**Quality Level Mapping:**
-
-| User Level | Description | H.264 Settings | H.265 Settings |
-|------------|-------------|----------------|----------------|
-| **1** | Smallest file with passable quality | CRF/CQ: 26 | CRF/CQ: 28 |
-| **2** | Balanced with good quality ⭐ | CRF/CQ: 22 | CRF/CQ: 26 |
-| **3** | Quality indistinguishable from source | CRF/CQ: 20 | CRF/CQ: 23 |
-
-**Hardware Capability Detection:**
-
-- NVENC capability is detected automatically. Current builds use standard `vbr` rate control with constant quality (`-b:v 0`).
-- VideoToolbox availability is verified by enumerating FFmpeg encoders and downloading Apple silicon-optimized binaries.
-- If hardware acceleration is unavailable, CPU encoding with CRF is used.
-
-**Hardware Compatibility:**
-
-- **GTX 1060+, RTX series**: Full H.264 and H.265 NVENC hardware acceleration support
-- **Apple silicon (M1/M2/M3/M4)**: Full H.264 and H.265 VideoToolbox hardware acceleration support
-- **Older GPUs or unsupported platforms**: Falls back to optimized CPU encoding
+The VP9 benchmark separately uses up to four seconds at 1280 pixels wide and writes `artifacts/vp9-benchmark/results.json`. It measures file size, total encoding time, decoded frame count, frame-aligned VMAF (mean and tenth percentile), PSNR and SSIM across multiple CRFs. Compare similar measured quality, not just identical CRF numbers. The regression harness also checks two-pass failure/cancellation cleanup, preservation of earlier exports, audio routing and variable-frame-rate timing.
 
 ## Technical Notes
 
-- The program extracts the entire PPTX structure for efficient batch processing
-- XML references are updated using string replacement to handle various reference formats
-- The final PPTX maintains full compatibility with PowerPoint and other Office applications
-- Processing preserves all PowerPoint-specific ZIP file characteristics
-- FFmpeg processes are properly managed with timeout and resource cleanup
-- Comprehensive error handling ensures partial failures don't corrupt the output
-- GPU encoding uses true constant quality mode (`-b:v 0`) for optimal quality-to-size ratios
+- PowerPoint media and XML references are updated together in a separate output presentation.
+- Successful standalone WebM exports and explicitly requested archive outputs are retained even when larger; the selected quality is never lowered just to beat the original size.
+- Filenames recognize both legacy `Q` values and new `L` user levels. An already-compressed video can be converted to another codec; same-codec delivery outputs are skipped to prevent accidental recompression. Archive outputs ending in `-L4H264.mp4`, `-L4H265.mp4` or `-L4VP9.webm` can be recompressed into levels 1-3, including the same codec. Same-codec archive-to-archive runs are skipped.
+- FFmpeg errors and timeouts retain the original input; hardware failures retry with the selected software codec and quality level.

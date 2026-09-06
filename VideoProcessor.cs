@@ -2,9 +2,10 @@ namespace PPTcrunch;
 
 public class VideoProcessor
 {
+    private const string OutputModifiers = @"(?:-\d+)?(?:-\d+FPS)?";
     /// <summary>
     /// Checks if a video filename indicates it has already been recompressed.
-    /// Detects patterns like " - Q22H264.mp4" (standalone) or "-Q26H265.mp4" (PowerPoint).
+    /// Recognizes legacy Q values and current L quality levels for MP4 and WebM.
     /// </summary>
     /// <param name="filename">The filename to check</param>
     /// <returns>True if the filename indicates the video has already been recompressed</returns>
@@ -13,10 +14,22 @@ public class VideoProcessor
         if (string.IsNullOrEmpty(filename))
             return false;
 
-        // Pattern: optional space + dash + optional space + Q + numbers + H + numbers + .mp4 at end
-        // Matches: " - Q22H264.mp4", "-Q26H265.mp4", etc.
-        var pattern = @"( )?-( )?Q\d+H\d+\.mp4$";
+        // Examples: " - Q22H264.mp4", "-L3H265.mp4", " - L2VP9.webm".
+        var pattern = $@" ?- ?(?:Q|L)\d+(?:H26[45]{OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$";
         return System.Text.RegularExpressions.Regex.IsMatch(filename, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    public static bool ShouldSkipRecompression(string filename, UserSettings settings)
+    {
+        if (!IsAlreadyRecompressed(filename)) return false;
+        // An archive is a reusable source for a smaller delivery encode, including
+        // the same codec. Still skip archive-to-archive runs of the same codec.
+        bool archive = System.Text.RegularExpressions.Regex.IsMatch(filename,
+            $@" ?- ?L4(?:H26[45]{OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (archive && settings.QualityLevel < 4) return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(filename,
+            settings.CodecSuffix + OutputModifiers + System.Text.RegularExpressions.Regex.Escape(settings.OutputExtension) + "$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     public async Task<bool> ProcessVideoFileAsync(string videoPath, UserSettings settings)
@@ -32,7 +45,7 @@ public class VideoProcessor
 
         // Check if video has already been recompressed
         string filename = Path.GetFileName(videoPath);
-        if (IsAlreadyRecompressed(filename))
+        if (ShouldSkipRecompression(filename, settings))
         {
             Console.WriteLine($"⚠ Video appears to have already been recompressed (filename: {filename})");
             Console.WriteLine("  Skipping to avoid double compression.");
@@ -41,7 +54,7 @@ public class VideoProcessor
 
         // Check if file is a supported video format
         string extension = Path.GetExtension(videoPath).ToLowerInvariant();
-        string[] supportedExtensions = { ".mp4", ".mpeg4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v" };
+        string[] supportedExtensions = { ".mp4", ".mpeg4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg", ".3gp", ".3g2", ".asf", ".ogv" };
 
         if (!supportedExtensions.Contains(extension))
         {
@@ -52,7 +65,10 @@ public class VideoProcessor
         try
         {
             // Generate output filename
-            string outputPath = GenerateOutputFilename(videoPath, settings);
+            int inputWidth = await EmbeddedFFmpegRunner.GetVideoWidthAsync(videoPath);
+            double? inputFrameRate = settings.ReduceHighFrameRates
+                ? await EmbeddedFFmpegRunner.GetVideoFrameRateAsync(videoPath) : null;
+            string outputPath = GenerateOutputFilename(videoPath, settings, inputWidth, inputFrameRate);
 
             Console.WriteLine($"Input:  {videoPath}");
             Console.WriteLine($"Output: {outputPath}");
@@ -69,6 +85,12 @@ public class VideoProcessor
                 Console.WriteLine();
                 Console.WriteLine($"✓ Video compressed successfully!");
                 ShowCompressionResults(result);
+                return true;
+            }
+            else if (result.WasCompressed && (settings.Codec == VideoCodec.VP9 || settings.QualityLevel == 4))
+            {
+                Console.WriteLine("✓ Export saved. It is larger than the source at the selected quality.");
+                Console.WriteLine($"  Original: {FormatFileSize(result.OriginalSize)}; export: {FormatFileSize(result.FinalSize)}");
                 return true;
             }
             else if (result.WasCompressed && !result.FileSizeReduced)
@@ -98,34 +120,20 @@ public class VideoProcessor
         }
     }
 
-    private string GenerateOutputFilename(string inputPath, UserSettings settings)
+    public static string GenerateOutputFilename(string inputPath, UserSettings settings, int? inputWidth = null, double? inputFrameRate = null)
     {
         string directory = Path.GetDirectoryName(inputPath) ?? "";
         string nameWithoutExt = Path.GetFileNameWithoutExtension(inputPath);
 
-        // Get actual quality value for filename
-        var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
-        int qualityValue;
-        if (settings.UseGPUAcceleration)
-        {
-            qualityValue = settings.HardwareAcceleration switch
-            {
-                HardwareAccelerationMode.AppleVideoToolbox => encodingSettings.VtQuality ?? encodingSettings.Cq ?? encodingSettings.Crf ?? 55,
-                HardwareAccelerationMode.NvidiaNvenc => encodingSettings.Cq ?? encodingSettings.VtQuality ?? encodingSettings.Crf ?? 25,
-                _ => encodingSettings.Crf ?? encodingSettings.Cq ?? encodingSettings.VtQuality ?? 25
-            };
-        }
-        else
-        {
-            qualityValue = encodingSettings.Crf ?? encodingSettings.Cq ?? encodingSettings.VtQuality ?? 25;
-        }
-
-        // Generate codec string
-        string codecString = settings.Codec == VideoCodec.H264 ? "H264" : "H265";
-
-        // Generate filename with pattern: "originalname - Q{quality}{codec}.mp4"
-        string outputFileName = $"{nameWithoutExt} - Q{qualityValue}{codecString}.mp4";
-
+        // The user level stays accurate if hardware encoding falls back to CPU.
+        // Match the encoder's even-width cap. Merely enabling the cap must not
+        // label videos that already fit it, or odd widths rounded for 4:2:0.
+        int widthLimit = Math.Max(2, settings.MaxWidth);
+        string resolutionSuffix = inputWidth > widthLimit ? $"-{widthLimit / 2 * 2}" : "";
+        double? targetRate = FrameRatePolicy.TargetRate(settings, inputFrameRate);
+        string fpsSuffix = targetRate.HasValue
+            ? $"-{targetRate.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}FPS" : "";
+        string outputFileName = $"{nameWithoutExt} - L{settings.QualityLevel}{settings.CodecSuffix}{resolutionSuffix}{fpsSuffix}{settings.OutputExtension}";
         return Path.Combine(directory, outputFileName);
     }
 
@@ -139,15 +147,15 @@ public class VideoProcessor
 
         try
         {
-            bool compressionSuccess = await EmbeddedFFmpegRunner.CompressVideoAsync(inputPath, outputPath, settings);
+            var encodingResult = await EmbeddedFFmpegRunner.CompressVideoWithResultAsync(inputPath, outputPath, settings);
 
-            if (compressionSuccess && File.Exists(outputPath))
+            if (encodingResult.Success && File.Exists(outputPath))
             {
                 result.FinalSize = new FileInfo(outputPath).Length;
                 result.WasCompressed = true;
                 result.FileSizeReduced = result.FinalSize < result.OriginalSize;
                 result.FinalFileName = Path.GetFileName(outputPath);
-                result.CompressionMethod = settings.UseGPUAcceleration ? "GPU" : "CPU";
+                result.CompressionMethod = encodingResult.Method;
                 result.Reason = result.FileSizeReduced ? "Compression successful" : "Compressed file was larger";
             }
             else

@@ -1,5 +1,15 @@
 namespace PPTcrunch;
 
+public record VideoEncodingResult(bool Success, HardwareAccelerationMode HardwareAcceleration)
+{
+    public string Method => HardwareAcceleration switch
+    {
+        HardwareAccelerationMode.NvidiaNvenc => "NVIDIA NVENC",
+        HardwareAccelerationMode.AppleVideoToolbox => "Apple VideoToolbox",
+        _ => "CPU"
+    };
+}
+
 public class VideoCompressionResult
 {
     public string OriginalFileName { get; set; } = string.Empty;

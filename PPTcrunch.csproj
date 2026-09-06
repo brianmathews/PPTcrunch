@@ -22,9 +22,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Compile Remove="tests/**/*.cs" />
         <PackageReference Include="System.IO.Compression.ZipFile" Version="4.3.0" />
         <PackageReference Include="Xabe.FFmpeg" Version="5.2.6" />
         <PackageReference Include="Xabe.FFmpeg.Downloader" Version="5.2.6" />
     </ItemGroup>
 
-</Project> 
+</Project>

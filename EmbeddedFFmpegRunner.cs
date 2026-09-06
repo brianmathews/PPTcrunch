@@ -9,7 +9,7 @@ namespace PPTcrunch;
 
 public class EmbeddedFFmpegRunner
 {
-    private const int TimeoutMinutes = 60; // minutes timeout per video
+    private const int TimeoutMinutes = 60; // minutes timeout per encoding pass
     private static bool _initialized = false;
     private static string? _ffmpegPath = null;
 
@@ -71,15 +71,6 @@ public class EmbeddedFFmpegRunner
             Console.WriteLine($"Failed to initialize embedded FFmpeg: {ex.Message}");
             throw;
         }
-    }
-
-    private static IConversion CreateConversion(IMediaInfo mediaInfo, string outputPath)
-    {
-        return FFmpeg.Conversions.New()
-            .AddStream(mediaInfo.VideoStreams.ToArray())
-            .AddStream(mediaInfo.AudioStreams.ToArray())
-            .SetOutput(outputPath)
-            .SetOverwriteOutput(true);
     }
 
     private static void AttachProgressHandlers(IConversion conversion)
@@ -305,295 +296,91 @@ public class EmbeddedFFmpegRunner
     }
 
     public static async Task<bool> CompressVideoAsync(string inputPath, string outputPath, UserSettings settings)
+        => (await CompressVideoWithResultAsync(inputPath, outputPath, settings)).Success;
+
+    public static async Task<int> GetVideoWidthAsync(string inputPath)
     {
         await EnsureInitializedAsync();
+        var mediaInfo = await FFmpeg.GetMediaInfo(inputPath);
+        return mediaInfo.VideoStreams.FirstOrDefault()?.Width
+            ?? throw new InvalidOperationException("No video stream found");
+    }
 
-        if (settings.UseGPUAcceleration && settings.HardwareAcceleration != HardwareAccelerationMode.None)
+    internal static async Task<double?> GetVideoFrameRateAsync(string inputPath)
+    {
+        await EnsureInitializedAsync();
+        return await FrameRatePolicy.ReadAsync(inputPath, Path.Combine(_ffmpegPath!, GetFFprobeExecutableName()));
+    }
+
+    public static async Task<VideoEncodingResult> CompressVideoWithResultAsync(string inputPath, string outputPath, UserSettings settings)
+    {
+        await EnsureInitializedAsync();
+        var hardware = settings.EffectiveHardwareAcceleration;
+        if (hardware != HardwareAccelerationMode.None)
         {
-            bool hardwareSuccess = await TryCompressWithHardwareAcceleration(inputPath, outputPath, settings);
-            if (hardwareSuccess)
+            if (await TryEncodeAsync(inputPath, outputPath, settings, hardware))
+                return new(true, hardware);
+            Console.WriteLine("Hardware compression failed, falling back to CPU at the selected quality level...");
+        }
+        bool success = await TryEncodeAsync(inputPath, outputPath, settings, HardwareAccelerationMode.None);
+        return new(success, HardwareAccelerationMode.None);
+    }
+
+    private static async Task<bool> TryEncodeAsync(string inputPath, string outputPath, UserSettings settings, HardwareAccelerationMode hardware)
+    {
+        string label = hardware == HardwareAccelerationMode.None ? "CPU" : GetHardwareLabel(hardware);
+        Console.WriteLine($"Running {label} compression...");
+        try
+        {
+            var mediaInfo = await FFmpeg.GetMediaInfo(inputPath);
+            if (!mediaInfo.VideoStreams.Any())
             {
+                Console.WriteLine("No video stream found");
+                return false;
+            }
+            double? inputRate = settings.ReduceHighFrameRates
+                ? await GetVideoFrameRateAsync(inputPath) : null;
+            double? targetRate = FrameRatePolicy.TargetRate(settings, inputRate);
+            if (targetRate.HasValue)
+                Console.WriteLine($"Reducing video from {inputRate:0.###} FPS to {targetRate:0.###} FPS.");
+            var args = EncodingArguments.Build(settings, hardware, inputFrameRate: inputRate);
+            // Preserve compatible audio without another lossy generation. Convert other
+            // input audio to the container's browser-compatible codec.
+            var audio = mediaInfo.AudioStreams.ToArray();
+            for (int i = 0; i < audio.Length; i++)
+            {
+                bool canCopy = settings.Codec == VideoCodec.VP9
+                    ? audio[i].Codec is "opus" or "vorbis"
+                    : audio[i].Codec == "aac";
+                if (canCopy) args.AddRange(new[] { $"-c:a:{i}", "copy" });
+                else if (audio[i].Channels > 2)
+                    args.AddRange(new[] { $"-b:a:{i}", $"{64 * audio[i].Channels}k" });
+            }
+            async Task<bool> RunPass(string title, List<string> options, string destination)
+            {
+                var conversion = FFmpeg.Conversions.New();
+                AttachProgressHandlers(conversion);
+                Console.WriteLine(title);
+                PrintCommand(title, inputPath, destination, options);
+                // Explicit arguments avoid source bitrate/codec options inferred by AddStream.
+                string command = $"-nostdin -i \"{inputPath}\" {string.Join(" ", options)} \"{destination}\"";
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(TimeoutMinutes));
+                await conversion.Start(command, timeout.Token);
                 return true;
             }
-
-            Console.WriteLine("Hardware compression failed, falling back to CPU compression...");
-        }
-
-        return await TryCompressWithCPU(inputPath, outputPath, settings);
-    }
-
-    private static async Task<bool> TryCompressWithHardwareAcceleration(string inputPath, string outputPath, UserSettings settings)
-    {
-        Console.WriteLine($"Trying {GetHardwareLabel(settings.HardwareAcceleration)} compression...");
-
-        try
-        {
-            var mediaInfo = await FFmpeg.GetMediaInfo(inputPath);
-            var videoStream = mediaInfo.VideoStreams.FirstOrDefault();
-            if (videoStream == null)
-            {
-                Console.WriteLine("No video stream found");
-                return false;
-            }
-
-            var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, true);
-            var codecParams = QualityConfigService.GetCodecParams(settings.Codec, true);
-            var scaleSize = GetScaleSize(videoStream.Width, videoStream.Height, settings.MaxWidth);
-
-            return settings.HardwareAcceleration switch
-            {
-                HardwareAccelerationMode.NvidiaNvenc => await RunNvencConversion(mediaInfo, inputPath, outputPath, settings, encodingSettings, codecParams, scaleSize),
-                HardwareAccelerationMode.AppleVideoToolbox => await RunVideoToolboxConversion(mediaInfo, inputPath, outputPath, settings, encodingSettings, codecParams, scaleSize),
-                _ => false
-            };
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Hardware compression error: {ex.Message}");
-
-            if (settings.HardwareAcceleration == HardwareAccelerationMode.NvidiaNvenc)
-            {
-                Console.WriteLine("This could be due to:");
-                Console.WriteLine("  - FFmpeg not compiled with NVENC support");
-                Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
-                Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
-                Console.WriteLine("  - GPU is busy with other tasks");
-            }
-            else if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)
-            {
-                Console.WriteLine("This could be due to:");
-                Console.WriteLine("  - macOS security restrictions preventing VideoToolbox access");
-                Console.WriteLine("  - FFmpeg build missing VideoToolbox encoder support");
-                Console.WriteLine("  - Unsupported codec/quality combination for this hardware");
-            }
-
-            return false;
-        }
-    }
-
-    private static async Task<bool> RunNvencConversion(IMediaInfo mediaInfo, string inputPath, string outputPath, UserSettings settings, EncodingSettings encodingSettings, CodecParams codecParams, (int width, int height) scaleSize)
-    {
-        var conversion = CreateConversion(mediaInfo, outputPath);
-
-        var args = new List<string>
-        {
-            "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
-            "-c:v", GetNvencCodecName(settings.Codec),
-            "-cq", $"{encodingSettings.Cq ?? 23}",
-            "-b:v", "0"
-        };
-
-        if (!string.IsNullOrEmpty(encodingSettings.Rc))
-        {
-            args.Add("-rc");
-            args.Add(encodingSettings.Rc);
-        }
-
-        if (!string.IsNullOrEmpty(encodingSettings.Preset))
-        {
-            args.Add("-preset");
-            args.Add(encodingSettings.Preset);
-        }
-
-        args.Add("-profile:v");
-        args.Add(codecParams.Profile ?? "high");
-
-        args.Add("-bf");
-        args.Add($"{codecParams.Bf ?? 3}");
-
-        args.Add("-refs");
-        args.Add($"{codecParams.Refs ?? 4}");
-
-        if (!string.IsNullOrEmpty(encodingSettings.Tune))
-        {
-            args.Add("-tune");
-            args.Add(encodingSettings.Tune);
-        }
-
-        if (encodingSettings.Multipass.HasValue)
-        {
-            args.Add("-multipass");
-            args.Add($"{encodingSettings.Multipass.Value}");
-        }
-
-        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-        {
-            args.Add("-tag:v");
-            args.Add(codecParams.Tag);
-        }
-
-        args.Add("-c:a");
-        args.Add("copy");
-
-        args.Add("-y");
-        args.Add("-stats");
-
-        conversion.AddParameter(string.Join(" ", args));
-
-        PrintCommand("Hardware Acceleration (NVIDIA NVENC)", inputPath, outputPath, args);
-        AttachProgressHandlers(conversion);
-
-        await conversion.Start();
-        Console.WriteLine();
-        Console.WriteLine("✓ NVIDIA NVENC compression completed successfully");
-        return true;
-    }
-
-    private static async Task<bool> RunVideoToolboxConversion(IMediaInfo mediaInfo, string inputPath, string outputPath, UserSettings settings, EncodingSettings encodingSettings, CodecParams codecParams, (int width, int height) scaleSize)
-    {
-        var conversion = FFmpeg.Conversions.New()
-            .AddStream(mediaInfo.VideoStreams.ToArray())
-            .AddStream(mediaInfo.AudioStreams.ToArray())
-            .SetOutput(outputPath)
-            .SetOverwriteOutput(true);
-
-        // For Apple VideoToolbox encoding, we don't need -hwaccel (that's for decoding)
-        // We just use the hardware encoders directly
-        var args = new List<string>
-        {
-            "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
-            "-c:v", GetVideoToolboxCodecName(settings.Codec),
-            "-q:v", $"{encodingSettings.VtQuality ?? 55}",
-            "-b:v", "0",
-            "-pix_fmt", "yuv420p"
-        };
-
-        if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-        {
-            args.Add("-tag:v");
-            args.Add(codecParams.Tag);
-        }
-
-        args.Add("-c:a");
-        args.Add("copy");
-
-        args.Add("-y");
-        args.Add("-stats");
-
-        conversion.AddParameter(string.Join(" ", args));
-
-        PrintCommand("Hardware Acceleration (Apple VideoToolbox)", inputPath, outputPath, args);
-        AttachProgressHandlers(conversion);
-
-        await conversion.Start();
-        Console.WriteLine();
-        Console.WriteLine("✓ Apple VideoToolbox compression completed successfully");
-        return true;
-    }
-
-    private static async Task<bool> TryCompressWithCPU(string inputPath, string outputPath, UserSettings settings)
-    {
-        Console.WriteLine($"Running CPU compression...");
-
-        try
-        {
-            var mediaInfo = await FFmpeg.GetMediaInfo(inputPath);
-            var videoStream = mediaInfo.VideoStreams.FirstOrDefault();
-            if (videoStream == null)
-            {
-                Console.WriteLine("No video stream found");
-                return false;
-            }
-
-            // Get quality settings from config
-            var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, false);
-            var codecParams = QualityConfigService.GetCodecParams(settings.Codec, false);
-
-            var scaleSize = GetScaleSize(videoStream.Width, videoStream.Height, settings.MaxWidth);
-
-            var conversion = CreateConversion(mediaInfo, outputPath);
-
-            var args = new List<string>
-            {
-                "-vf", $"scale={scaleSize.width}:{scaleSize.height}",
-                "-c:v", GetCpuCodecName(settings.Codec),
-                "-crf", $"{encodingSettings.Crf ?? 23}",
-                "-preset", "medium",
-                "-profile:v", codecParams.Profile ?? "high",
-                "-bf", $"{codecParams.Bf ?? 3}",
-                "-refs", $"{codecParams.Refs ?? 4}"
-            };
-
-            if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(codecParams.Tag))
-            {
-                args.Add("-tag:v");
-                args.Add(codecParams.Tag);
-            }
-
-            args.Add("-c:a");
-            args.Add("copy");
-
-            args.Add("-y");
-            args.Add("-stats");
-
-            conversion.AddParameter(string.Join(" ", args));
-
-            PrintCommand("CPU Processing", inputPath, outputPath, args);
-            AttachProgressHandlers(conversion);
-
-            await conversion.Start();
-            Console.WriteLine();
-            Console.WriteLine("✓ CPU compression completed successfully");
+            bool success = settings.Codec == VideoCodec.VP9 && settings.UseVp9TwoPass
+                ? await Vp9TwoPassEncoder.RunAsync(inputPath, outputPath, settings, args, RunPass)
+                : await RunPass(label, args, outputPath);
+            if (!success) return false;
+            Console.WriteLine($"\n✓ {label} compression completed successfully");
             return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"CPU compression error: {ex.Message}");
+            Console.WriteLine($"{label} compression error: {ex.Message}");
             return false;
         }
     }
-
-    private static string GetNvencCodecName(VideoCodec codec)
-    {
-        return codec switch
-        {
-            VideoCodec.H264 => "h264_nvenc",
-            VideoCodec.H265 => "hevc_nvenc",
-            _ => "h264_nvenc"
-        };
-    }
-
-    private static string GetVideoToolboxCodecName(VideoCodec codec)
-    {
-        return codec switch
-        {
-            VideoCodec.H264 => "h264_videotoolbox",
-            VideoCodec.H265 => "hevc_videotoolbox",
-            _ => "h264_videotoolbox"
-        };
-    }
-
-    private static string GetCpuCodecName(VideoCodec codec)
-    {
-        return codec switch
-        {
-            VideoCodec.H264 => "libx264",
-            VideoCodec.H265 => "libx265",
-            _ => "libx264"
-        };
-    }
-
-    private static (int width, int height) GetScaleSize(int originalWidth, int originalHeight, int maxWidth)
-    {
-        if (maxWidth == int.MaxValue || originalWidth <= maxWidth)
-        {
-            // No scaling needed, just ensure even dimensions
-            return (MakeEven(originalWidth), MakeEven(originalHeight));
-        }
-
-        // Scale down maintaining aspect ratio
-        double aspectRatio = (double)originalHeight / originalWidth;
-        int newWidth = maxWidth;
-        int newHeight = (int)(newWidth * aspectRatio);
-
-        return (MakeEven(newWidth), MakeEven(newHeight));
-    }
-
-    private static int MakeEven(int value)
-    {
-        return value % 2 == 0 ? value : value - 1;
-    }
-
     public static async Task<string?> GetFFmpegExecutablePathAsync()
     {
         await EnsureInitializedAsync();

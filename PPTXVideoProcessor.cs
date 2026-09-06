@@ -4,6 +4,8 @@ public class PPTXVideoProcessor
 {
     public async Task ProcessAsync(string pptxPath, UserSettings settings)
     {
+        if (settings.Codec == VideoCodec.VP9)
+            throw new NotSupportedException("WebM export is for standalone videos. Select H.264 or H.265 for PowerPoint.");
         Console.WriteLine($"Processing: {pptxPath}");
         Console.WriteLine("=".PadRight(50, '='));
 
@@ -77,7 +79,7 @@ public class PPTXVideoProcessor
             var video = videoFiles[i];
 
             // Check if video has already been recompressed
-            if (VideoProcessor.IsAlreadyRecompressed(video.OriginalFileName))
+            if (VideoProcessor.ShouldSkipRecompression(video.OriginalFileName, settings))
             {
                 Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Skipping: {video.OriginalFileName}");
                 Console.WriteLine($"⚠ Video appears to have already been recompressed");
@@ -108,16 +110,8 @@ public class PPTXVideoProcessor
 
             string nameWithoutExt = Path.GetFileNameWithoutExtension(video.OriginalFileName);
 
-            // Generate filename with quality/codec suffix for PowerPoint videos (no spaces)
-            // Get actual quality value for filename
-            var encodingSettings = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
-            int qualityValue = settings.UseGPUAcceleration ? (encodingSettings.Cq ?? 25) : (encodingSettings.Crf ?? 25);
-
-            // Generate codec string
-            string codecString = settings.Codec == VideoCodec.H264 ? "H264" : "H265";
-
-            // Generate filename with pattern: "originalname-Q{quality}{codec}.mp4" (no spaces for PowerPoint)
-            string outputFileName = $"{nameWithoutExt}-Q{qualityValue}{codecString}.mp4";
+            // Use the user quality level, which remains valid after a CPU fallback.
+            string outputFileName = $"{nameWithoutExt}-L{settings.QualityLevel}{settings.CodecSuffix}{settings.OutputExtension}";
             string outputPath = Path.Combine(tempDir, outputFileName);
 
             Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Compressing: {video.OriginalFileName} -> {outputFileName}");
@@ -133,21 +127,21 @@ public class PPTXVideoProcessor
 
             try
             {
-                bool success = await EmbeddedFFmpegRunner.CompressVideoAsync(video.TempOrigPath, outputPath, settings);
-                if (success && File.Exists(outputPath))
+                var encodingResult = await EmbeddedFFmpegRunner.CompressVideoWithResultAsync(video.TempOrigPath, outputPath, settings);
+                if (encodingResult.Success && File.Exists(outputPath))
                 {
                     long compressedSize = new FileInfo(outputPath).Length;
                     bool isSmaller = compressedSize < result.OriginalSize;
 
-                    if (isSmaller)
+                    if (isSmaller || settings.QualityLevel == 4)
                     {
                         // Use compressed version - it's smaller
                         result.FinalFileName = outputFileName;
                         result.WasCompressed = true;
-                        result.FileSizeReduced = true;
+                        result.FileSizeReduced = isSmaller;
                         result.FinalSize = compressedSize;
-                        result.CompressionMethod = "GPU/CPU";
-                        result.Reason = "Compressed file is smaller";
+                        result.CompressionMethod = encodingResult.Method;
+                        result.Reason = isSmaller ? "Compressed file is smaller" : "Requested archive output retained";
 
                         Console.WriteLine($"✓ Compression successful - using compressed version");
                         ShowCompressionResults(video.TempOrigPath, outputPath);

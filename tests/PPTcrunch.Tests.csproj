@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- This test executable calls the app's APIs, not its self-contained host. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../PPTcrunch.csproj" AdditionalProperties="SelfContained=false;PublishSingleFile=false;PublishReadyToRun=false" /></ItemGroup>
+</Project>

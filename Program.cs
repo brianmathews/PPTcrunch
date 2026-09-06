@@ -77,7 +77,7 @@ class Program
             }
 
             // Collect user settings
-            var settings = await CollectUserSettingsAsync(systemCheckResult);
+            var settings = await CollectUserSettingsAsync(systemCheckResult, allowWebM: pptxFiles.Count == 0);
 
             // Process files
             int successCount = 0;
@@ -246,7 +246,7 @@ class Program
         return result;
     }
 
-    private static Task<UserSettings> CollectUserSettingsAsync(SystemCheckResult systemCheck)
+    private static Task<UserSettings> CollectUserSettingsAsync(SystemCheckResult systemCheck, bool allowWebM)
     {
         var settings = new UserSettings();
 
@@ -264,9 +264,10 @@ class Program
                 _ => "Use hardware acceleration for faster encoding?"
             };
 
-            Console.Write($"{hardwarePrompt} (Y/n, default: Y): ");
+            Console.WriteLine("CPU encoding is recommended for smaller files at a given quality; hardware encoding is faster.");
+            Console.Write($"{hardwarePrompt} (y/N, default: N): ");
             string? gpuInput = Console.ReadLine()?.Trim().ToLowerInvariant();
-            settings.UseGPUAcceleration = string.IsNullOrEmpty(gpuInput) || gpuInput == "y" || gpuInput == "yes";
+            settings.UseGPUAcceleration = gpuInput == "y" || gpuInput == "yes";
             settings.HardwareAcceleration = settings.UseGPUAcceleration ? systemCheck.GPUInfo.HardwareAcceleration : HardwareAccelerationMode.None;
         }
         else
@@ -276,55 +277,46 @@ class Program
             Console.WriteLine("Hardware acceleration not available - using CPU encoding");
         }
 
-        // Codec preference
         Console.WriteLine();
         Console.WriteLine("Video codec options:");
-        Console.WriteLine("  1. H.264 (better compatibility, works on older systems)");
-        Console.WriteLine("  2. H.265 (smaller files, better compression, newer standard)");
-
-        if (settings.UseGPUAcceleration)
-        {
-            if (!systemCheck.GPUInfo.SupportsH265)
-            {
-                Console.WriteLine("     Note: Your hardware encoder doesn't support H.265 encoding - H.264 will be used if selected");
-            }
-        }
-
-        Console.Write("Enter your choice (1 or 2, default: 2): ");
-        string? codecInput = Console.ReadLine()?.Trim();
-        if (!string.IsNullOrEmpty(codecInput) && int.TryParse(codecInput, out int codecChoice))
-        {
-            if (codecChoice == 1)
-            {
-                settings.Codec = VideoCodec.H264;
-            }
-            else if (codecChoice == 2)
-            {
-                // Check if H.265 is supported when using hardware acceleration
-                if (settings.UseGPUAcceleration && !systemCheck.GPUInfo.SupportsH265)
-                {
-                    Console.WriteLine("Warning: H.265 not supported by your hardware encoder. Falling back to H.264.");
-                    settings.Codec = VideoCodec.H264;
-                }
-                else
-                {
-                    settings.Codec = VideoCodec.H265;
-                }
-            }
-        }
+        Console.WriteLine("  1. H.264 / MP4 (broadest compatibility, including older devices)");
+        Console.WriteLine("  2. H.265 / MP4 (smaller files, requires HEVC playback support)");
+        if (allowWebM)
+            Console.WriteLine("  3. WebM / VP9 (final website videos, two-pass CPU encoding)");
         else
-        {
-            // Default to H.265 if supported, otherwise H.264
-            if (settings.UseGPUAcceleration && !systemCheck.GPUInfo.SupportsH265)
-            {
-                settings.Codec = VideoCodec.H264;
-            }
-            else
-            {
-                settings.Codec = VideoCodec.H265;
-            }
-        }
+            Console.WriteLine("  WebM is available for standalone video batches; PowerPoint batches require MP4.");
 
+        while (true)
+        {
+            Console.Write(allowWebM ? "Enter your choice (1-3, default: 2): " : "Enter your choice (1 or 2, default: 2): ");
+            string? codecInput = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(codecInput)) break;
+            if (int.TryParse(codecInput, out int choice) && choice >= 1 && choice <= (allowWebM ? 3 : 2))
+            {
+                settings.Codec = (VideoCodec)choice;
+                break;
+            }
+            Console.WriteLine("Please select one of the listed codecs.");
+        }
+        if (settings.Codec == VideoCodec.VP9)
+        {
+            settings.UseGPUAcceleration = false;
+            settings.HardwareAcceleration = HardwareAccelerationMode.None;
+            Console.WriteLine("VP9 uses CPU encoding; NVENC and VideoToolbox do not encode VP9.");
+            Console.WriteLine("Two passes: analyze the video, then encode at the selected quality for efficient web delivery.");
+            Console.WriteLine("WebM on iPhone/iPad requires iOS/iPadOS 17.4 or later. Use H.264 for older devices.");
+            Console.WriteLine("Two passes are recommended for final website videos. One pass can be smaller for mostly static clips.");
+            Console.Write("Use two-pass WebM encoding? (Y/n, default: Y): ");
+            string? passInput = Console.ReadLine()?.Trim().ToLowerInvariant();
+            settings.UseVp9TwoPass = passInput != "n" && passInput != "no";
+        }
+        else if (settings.UseGPUAcceleration &&
+                 !(settings.Codec == VideoCodec.H264 ? systemCheck.GPUInfo.SupportsH264 : systemCheck.GPUInfo.SupportsH265))
+        {
+            Console.WriteLine("The selected codec will use CPU encoding because it is unavailable on this hardware.");
+            settings.UseGPUAcceleration = false;
+            settings.HardwareAcceleration = HardwareAccelerationMode.None;
+        }
         // Quality level
         Console.WriteLine();
         Console.WriteLine("Quality level options:");
@@ -333,12 +325,19 @@ class Program
         {
             Console.WriteLine($"  {kvp.Key}. {kvp.Value.Name}");
         }
-        Console.Write("Enter your choice (1-3, default: 2): ");
+        Console.Write("Enter your choice (1-4, default: 2): ");
         string? qualityInput = Console.ReadLine()?.Trim();
-        if (!string.IsNullOrEmpty(qualityInput) && int.TryParse(qualityInput, out int qualityLevel) && qualityLevel >= 1 && qualityLevel <= 3)
+        if (!string.IsNullOrEmpty(qualityInput) && int.TryParse(qualityInput, out int qualityLevel) && qualityLevel >= 1 && qualityLevel <= 4)
         {
             settings.QualityLevel = qualityLevel;
         }
+
+        Console.WriteLine();
+        Console.WriteLine("Halve even integer frame rates of 48 FPS or higher (48→24, 50→25, 60→30, 120→60).");
+        Console.WriteLine("Lower, odd and fractional rates are preserved.");
+        Console.Write("Enable frame-rate reduction? (y/N, default: N): ");
+        string? fpsInput = Console.ReadLine()?.Trim().ToLowerInvariant();
+        settings.ReduceHighFrameRates = fpsInput == "y" || fpsInput == "yes";
 
         // High resolution reduction
         Console.WriteLine();
@@ -369,7 +368,10 @@ class Program
         Console.WriteLine("Selected settings:");
         Console.WriteLine($"  Hardware acceleration: {(settings.UseGPUAcceleration ? $"Yes ({GetHardwareDescription(settings.HardwareAcceleration)})" : "No")}");
         Console.WriteLine($"  Video codec: {settings.GetCodecDisplayName()}");
+        if (settings.Codec == VideoCodec.VP9)
+            Console.WriteLine($"  WebM encoding: {(settings.UseVp9TwoPass ? "Two passes" : "One pass")}");
         Console.WriteLine($"  Quality level: {settings.GetQualityLevelDisplayName()}");
+        Console.WriteLine($"  Frame rate: {(settings.ReduceHighFrameRates ? "Halve even integer rates >=48 FPS; preserve all others" : "Preserve original")}");
         Console.WriteLine($"  Maximum width: {(settings.MaxWidth == int.MaxValue ? "No limit" : $"{settings.MaxWidth} pixels")}");
         Console.WriteLine();
 
@@ -400,7 +402,7 @@ class Program
         Console.WriteLine("Output:");
         Console.WriteLine("  - PPTX files: Creates new file with '-shrunk' suffix");
         Console.WriteLine("  - Video files: Creates new file with quality and codec suffix");
-        Console.WriteLine("    Example: video.mov → video - Q22H264.mp4");
+        Console.WriteLine("    Examples: video.mov → video - L2H264.mp4 or video - L2VP9.webm");
     }
 
     private static List<string> ExpandFilePattern(string pattern)

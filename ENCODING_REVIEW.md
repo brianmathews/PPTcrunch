@@ -18,6 +18,8 @@ The app targets quality and lets video bitrate vary. It does not lower quality t
 | H.264 NVENC CQ | 29 | 26 | 23 | 20 |
 | H.265 NVENC CQ | 28 | 26 | 23 | 20 |
 | VP9 CPU CRF | 34 | 30 | 28 | 24 |
+| AV1 SVT CPU CRF | 34 | 30 | 26 | 20 |
+| AV1 NVENC CQ (provisional) | 28 | 26 | 23 | 20 |
 | Apple Q, H.264 and H.265 | 50 | 65 | 75 | 85 |
 
 These scales are encoder-specific. In particular, copying CPU CRF values directly to NVENC CQ spent substantially more bits on the synthetic fixture without matching the intended level. NVIDIA values now have their own mapping. Apple Q increases with quality; other columns decrease.
@@ -110,3 +112,68 @@ The user's frequent 50 FPS sources motivated replacing the original 30 FPS cap: 
 A bounded test used a two-second 640×360 moving pattern sampled to 50 FPS from a 150 FPS reference. Conversion to lossless 30 FPS output took 0.13 s with `fps=30`, 0.16 s with `framerate=fps=30` (blending), and 3.19 s with `minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:me=epzs:search_param=16`. Inspection showed softened/doubled edges with blending. Motion compensation improved that edge but was roughly 24 times as expensive in this short filter-only test and emitted 59 rather than 60 frames, so adopting it would also require deliberate end-of-video handling. These are single-run synthetic observations, not a general perceptual evaluation. See [FFmpeg's motion-interpolation options](https://ffmpeg.org/ffmpeg-filters.html#minterpolate). Blending and motion compensation are not defaults.
 
 Run the regression harness and preset benchmark using the commands in [README](README.md#validation). Add `--vmaf` to the integration command when FFmpeg includes `libvmaf`. Generated measurements and videos are under `artifacts/`; they are intentionally not committed.
+
+
+## AV1 web delivery addition - September 8, 2026
+
+**Output:** a separate MP4 containing AV1 Main-profile 10-bit YUV 4:2:0 video (`av01`) and AAC audio, with `faststart`. Windows and macOS CPU encoding use `libsvtav1`. Optional NVIDIA encoding uses `av1_nvenc`; an actual short encode with the chosen output settings verifies support. An FFmpeg encoder listing alone is insufficient. This machine's GTX 1660 SUPER correctly fails the AV1 probe and uses CPU encoding. GPU failure during a real job still retries the same codec and user quality level on the CPU.
+
+AV1 is a standalone export. PowerPoint and mixed batches continue to offer H.264/H.265. Filenames, resolution/FPS modifiers, reusable archives, and same-codec delivery protection include AV1. Explicit AV1 exports are retained even if larger than the source. No additional VP9 temporary directories or two-pass statistics are created for AV1.
+
+### Browser and hardware boundary
+
+[WebKit's Safari AV1 announcement](https://webkit.org/blog/14445/webkit-features-in-safari-17-0/) explicitly requires hardware AV1 decoding, including iPhone 15 Pro. Safari on M2 Macs and standard iPhone 15 devices cannot be assumed to play AV1 merely because the operating system/browser is current. Current Chrome/Edge/Firefox support AV1 on supported platforms, with software or hardware decoding as available. Browser playback on actual iOS, Android and macOS devices has not been tested here.
+
+A site serving both groups should offer **separate AV1 and H.264 files**, with correct codec declarations/source selection. The browser fetches the selected alternative; neither PPTcrunch nor this delivery scheme combines the two codecs in a single download. Range requests may help seeking/progressive delivery, but they are not the mechanism for choosing between these encodings. An AV1-only export is still useful when the website's audience has compatible devices.
+
+[NVIDIA's encoder guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/nvenc-video-encoder-api-prog-guide/index.html) documents AV1 encoding starting with Ada hardware. [Apple's current MacBook Pro specifications](https://www.apple.com/macbook-pro/specs/) list AV1 decoding, alongside H.264/HEVC/ProRes encoding. This app therefore uses CPU AV1 on Mac; its existing H.264/HEVC VideoToolbox paths remain available.
+
+### Quality and speed choices
+
+SVT-AV1 **preset 4, `tune=0`, CRF 34/30/26/20**, with up to 240 frames between keyframes. This favors efficient final delivery, avoids the most expensive presets, and keeps grain synthesis/denoising disabled for screen recordings and animation. [SVT-AV1's guidance](https://gitlab.com/AOMediaCodec/SVT-AV1/-/blob/v2.1.0/Docs/CommonQuestions.md) groups presets 4-6 as balanced and 1-3 as appropriate when encode time matters little. The installed SVT-AV1 1.7 accepts these options. Newer releases may change their behavior.
+
+[HandBrake's quality guidance](https://handbrake.fr/docs/en/1.6.0/workflow/adjust-quality.html) recommends SVT RF 25-35 as a starting range for 720p/1080p. Good and Better sit within that range; level 3 uses 26 to favor fidelity without spending archive-level bits. Archive uses 20 as extra lossy headroom for subsequent compression, not a lossless or guaranteed generation-proof master. The values are engineering starting points, not conversions of x264/x265 CRF numbers or a guarantee of visual transparency.
+
+NVENC uses **CQ 28/26/23/20**, P6/HQ, uncapped quality-targeted VBR, quarter-resolution multipass, 32-frame lookahead, spatial/temporal adaptive quantization and 10-bit input (`p010le`). These CQ values deliberately use the hardware encoder's own scale. Successful AV1 hardware encoding and quality equivalence could not be measured on this GPU, so the AV1 CQ table is provisional. CPU encoding remains the default for quality/size priority.
+
+Multi-pass was considered. SVT guidance describes its principal benefit as bitrate allocation for a specified VBR budget, with some potential CRF gains for difficult high-motion material. CPU AV1 here uses single-pass CRF: no fixed bitrate target, no blind reuse of libvpx's two-pass workflow, and no claim that multipass can never improve AV1. NVENC's selected multipass operates internally during encoding, not by encoding the entire file twice.
+
+### 8-bit sources and 10-bit output
+
+The chosen output remains 10-bit even from 8-bit RGB or YUV input. It does not restore missing colors, create HDR or preserve full RGB chroma; it gives compression/resampling additional numerical precision. SVT documentation identifies reduced rounding as a potential fidelity benefit with possible size/decode-cost tradeoffs. Hardware AV1 Main support includes 8/10-bit 4:2:0.
+
+Two normalized 8-bit, two-second 1280x720 samples were compared at preset 4. On the screen recording, 10-bit was 3.3-9.5% smaller across the four CRFs, with VMAF improvements of 0.12-0.18. On the synthetic motion pattern, size changes ranged from 1.7% smaller to 4.0% larger and VMAF was lower by 0.02-0.17. Thus 10-bit is a practical default for the user's screen/animation workflow, not a universal reduction in file size or proof of visible improvement. Metrics were computed after conversion to a common 8-bit pixel format against equal-length references.
+
+At CRF 30, preset 4 versus 6 reduced screen bytes by 7.5% and motion bytes by 3.0%, with slightly higher VMAF. Preset 3 reduced bytes another 7.2%/15.5% but slightly lowered VMAF at the same CRF and took substantially longer. This is not an equal-quality rate/distortion proof: CRF output varies with preset. Timing on this workstation was noisy due to other local activity; it supports only a broad slowdown comparison. The official preset guidance and these bounded measurements support preset 4 as the default compromise.
+
+### Validation and limits
+
+- Full regression/integration matrix passed for all H.264/H.265/VP9/AV1 CPU quality levels and available H.264/HEVC NVENC paths. AV1's four synthetic 640x360 outputs grew monotonically in file size and PSNR/VMAF with quality level; VMAF was 98.82/99.28/99.58/99.79. These scores do not establish human transparency on real footage.
+- AV1 workflow tests passed for 8-bit RGB input, 10-bit Main/`av01` output, silent video, fast-start metadata placement, changed dimensions/FPS and filenames, larger-output retention, unsupported-NVENC fallback, archive reuse, PowerPoint exclusion and VFR timestamp preservation. The shared integration tests cover AAC audio and both FFmpeg runners.
+- Windows in-app browser played the generated AV1 MP4 to completion: 25 decoded frames, 160x90, one second, no media error. This verifies one Chromium-based browser, not all target platforms.
+- Published Windows executable was exercised through its interactive prompts, including requested GPU use falling back to CPU, AV1 selection, resizing and 50-to-25 FPS conversion.
+- CPU FFmpeg requires `libsvtav1`; older builds can reject dimensions below 64 pixels. Existing per-encode 60-minute timeout remains. No full HDR metadata/tone-mapping workflow was added. The application and source should be rebuilt on macOS; successful AV1 Mac/NVIDIA hardware playback/encoding has not been claimed.
+
+Reproduce with `--integration --nvenc --vmaf`, `--av1`, and `python tests/benchmark-av1.py --ffmpeg C:/ffmpeg/ffmpeg.exe sample.mkv`. Use `--av1-nvenc` only on AV1-capable hardware. Raw measurements are under `artifacts/encoding-tests` and `artifacts/av1-review`; these generated files are ignored by Git.
+
+
+## Passable level addition - September 8, 2026
+
+Passable is **level 0**, below the existing levels 1-4. This preserves the meaning of legacy filenames, particularly L4 reusable archives. Better (2) remains the default. Passable targets smaller delivery files with minor, non-distracting artifacts during normal playback; no fixed quality value can guarantee that perception for every scene or display.
+
+| Encoder | Passable (0) | Good (1) |
+|---|---:|---:|
+| H.264 CPU CRF | 28 | 26 |
+| H.265 CPU CRF | 30 | 28 |
+| VP9 CPU CRF | 38 | 34 |
+| AV1 SVT CPU CRF | 38 | 34 |
+| H.264 NVENC CQ | 32 | 29 |
+| H.265 NVENC CQ | 31 | 28 |
+| AV1 NVENC CQ | 31 | 28 |
+| Apple H.264/H.265 Q | 40 | 50 |
+
+These are incremental steps on each encoder's own scale. Software speed presets, visual tuning, VP9 two-pass selection, hardware multipass, audio and pixel formats stay unchanged. The smaller file comes from accepting more compression loss, not switching to a faster/less efficient encoder preset. [HandBrake's guidance](https://handbrake.fr/docs/en/latest/workflow/adjust-quality.html) supports small quality adjustments and emphasizes encoder-specific scales and content dependence; it does not prescribe these exact values.
+
+Both compression and capture/transcode quality menus accept 0-4. Passable filenames use `-L0`, with the existing optional width/FPS modifiers. Old L1-L4 meanings, archive-to-delivery behavior, defaults and PowerPoint codec restrictions remain unchanged. The existing parameter/real-encoding matrix now includes all five levels. Apple and AV1 NVIDIA values remain uncalibrated on live hardware here.
+
+Validation: on the existing four-second 640x360 moving-pattern fixture with audio, level 0 files were 17.2% (x264), 15.3% (x265), 15.8% (VP9), and 15.6% (SVT-AV1) smaller than Good. NVENC reductions were 22.6% (H.264) and 22.5% (HEVC). File size and PSNR increased monotonically through levels 0-4. These are fixture measurements, not a guarantee of savings or a human-perception study. The published CLI accepted level 0 and generated an AV1 file with both L0 and changed-FPS suffixes.

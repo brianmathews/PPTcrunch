@@ -29,7 +29,7 @@ if exist publish\pptcrunch.exe (
     echo [OK] No external dependencies required  
     echo [OK] Embedded FFmpeg included - no external installation needed
     echo [OK] Auto-detects NVIDIA GPU capabilities
-    echo [OK] Self-contained includes .NET 8 runtime
+    echo [OK] Self-contained includes .NET 10 runtime
     echo.
     echo Ready for distribution to end users!
     echo.

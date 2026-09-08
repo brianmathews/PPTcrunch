@@ -246,7 +246,7 @@ public class EmbeddedFFmpegRunner
     private static async Task DownloadMacFFmpegAsync(string ffmpegBaseDir)
     {
         // Use Martin Riedl's FFmpeg builds which include Apple VideoToolbox hardware acceleration
-        string architecture = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "amd64";
+        string architecture = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "amd64";
         string baseUrl = $"https://ffmpeg.martin-riedl.de/download/macos/{architecture}/1756401489_8.0";
 
         Console.WriteLine($"  Downloading Apple optimized FFmpeg build with VideoToolbox support for {architecture}...");
@@ -412,84 +412,6 @@ public class EmbeddedFFmpegRunner
         }
     }
 
-    public static async Task<bool> CheckNVENCAvailabilityAsync()
-    {
-        Console.WriteLine("Checking NVIDIA NVENC availability...");
-
-        try
-        {
-            await EnsureInitializedAsync();
-
-            // Try a simple conversion with NVENC to test availability
-            // This is a quick test - we'll create a minimal test
-            var tempInput = Path.GetTempFileName() + ".mp4";
-            var tempOutput = Path.GetTempFileName() + ".mp4";
-
-            try
-            {
-                // Create a minimal test video (1 second, 2x2 pixel)
-                var testConversion = FFmpeg.Conversions.New()
-                    .SetOutput(tempInput)
-                    .SetOverwriteOutput(true);
-
-                testConversion.AddParameter("-f lavfi -i testsrc=duration=1:size=2x2:rate=1 -c:v libx264 -t 1");
-                await testConversion.Start();
-
-                // Test NVENC encoding
-                var nvencTest = FFmpeg.Conversions.New()
-                    .SetOutput(tempOutput)
-                    .SetOverwriteOutput(true);
-
-                nvencTest.AddParameter($"-i \"{tempInput}\" -c:v h264_nvenc -t 0.1");
-                await nvencTest.Start();
-
-                Console.WriteLine("✓ NVIDIA NVENC hardware acceleration is available");
-                return true;
-            }
-            catch
-            {
-                Console.WriteLine("⚠ NVIDIA NVENC hardware acceleration is not available");
-                Console.WriteLine("  This could be due to:");
-                Console.WriteLine("  - No NVIDIA GPU present");
-                Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
-                Console.WriteLine("  - Outdated GPU drivers");
-                Console.WriteLine("  - FFmpeg not compiled with NVENC support");
-                return false;
-            }
-            finally
-            {
-                // Cleanup test files with better error handling
-                try
-                {
-                    if (File.Exists(tempInput))
-                    {
-                        File.Delete(tempInput);
-                        Console.WriteLine("  ✓ Cleaned up temporary test input file");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"  ⚠ Could not delete temporary test input file: {ex.Message}");
-                }
-
-                try
-                {
-                    if (File.Exists(tempOutput))
-                    {
-                        File.Delete(tempOutput);
-                        Console.WriteLine("  ✓ Cleaned up temporary test output file");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"  ⚠ Could not delete temporary test output file: {ex.Message}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error checking NVENC availability: {ex.Message}");
-            return false;
-        }
-    }
+    public static Task<bool> CheckNVENCAvailabilityAsync() =>
+        GPUDetectionService.ProbeHardwareAsync(VideoCodec.H264, HardwareAccelerationMode.NvidiaNvenc);
 }

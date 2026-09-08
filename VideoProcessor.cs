@@ -15,7 +15,7 @@ public class VideoProcessor
             return false;
 
         // Examples: " - Q22H264.mp4", "-L3H265.mp4", " - L2VP9.webm".
-        var pattern = $@" ?- ?(?:Q|L)\d+(?:H26[45]{OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$";
+        var pattern = $@" ?- ?(?:Q|L)\d+(?:(?:H26[45]|AV1){OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$";
         return System.Text.RegularExpressions.Regex.IsMatch(filename, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
@@ -25,7 +25,7 @@ public class VideoProcessor
         // An archive is a reusable source for a smaller delivery encode, including
         // the same codec. Still skip archive-to-archive runs of the same codec.
         bool archive = System.Text.RegularExpressions.Regex.IsMatch(filename,
-            $@" ?- ?L4(?:H26[45]{OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            $@" ?- ?L4(?:(?:H26[45]|AV1){OutputModifiers}\.mp4|VP9{OutputModifiers}\.webm)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (archive && settings.QualityLevel < 4) return false;
         return System.Text.RegularExpressions.Regex.IsMatch(filename,
             settings.CodecSuffix + OutputModifiers + System.Text.RegularExpressions.Regex.Escape(settings.OutputExtension) + "$",
@@ -87,7 +87,7 @@ public class VideoProcessor
                 ShowCompressionResults(result);
                 return true;
             }
-            else if (result.WasCompressed && (settings.Codec == VideoCodec.VP9 || settings.QualityLevel == 4))
+            else if (result.WasCompressed && (settings.StandaloneOnly || settings.QualityLevel == 4))
             {
                 Console.WriteLine("✓ Export saved. It is larger than the source at the selected quality.");
                 Console.WriteLine($"  Original: {FormatFileSize(result.OriginalSize)}; export: {FormatFileSize(result.FinalSize)}");
@@ -133,7 +133,7 @@ public class VideoProcessor
         double? targetRate = FrameRatePolicy.TargetRate(settings, inputFrameRate);
         string fpsSuffix = targetRate.HasValue
             ? $"-{targetRate.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}FPS" : "";
-        string outputFileName = $"{nameWithoutExt} - L{settings.QualityLevel}{settings.CodecSuffix}{resolutionSuffix}{fpsSuffix}{settings.OutputExtension}";
+        string outputFileName = $"{nameWithoutExt}-L{settings.QualityLevel}{settings.CodecSuffix}{resolutionSuffix}{fpsSuffix}{settings.OutputExtension}";
         return Path.Combine(directory, outputFileName);
     }
 

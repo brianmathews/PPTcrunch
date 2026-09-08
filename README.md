@@ -1,6 +1,6 @@
 # PPTcrunch - PowerPoint & Video Compressor
 
-PPTcrunch is a .NET 8 console application that compresses videos using quality-based FFmpeg encoding, with optional GPU acceleration. It supports both PowerPoint (.pptx) files with embedded videos AND individual video files, with wildcard support for batch processing.
+PPTcrunch is a .NET 10 console application that compresses videos using quality-based FFmpeg encoding, with optional GPU acceleration. It supports both PowerPoint (.pptx) files with embedded videos AND individual video files, with wildcard support for batch processing.
 
 ## Table of Contents
 
@@ -25,9 +25,9 @@ PPTcrunch is a .NET 8 console application that compresses videos using quality-b
 
 - **Dual File Support**: Process both PowerPoint (.pptx) files AND individual video files
 - **Wildcard Processing**: Support for wildcards to batch process multiple files (e.g., `*.mov`, `*.pptx`)
-- **Interactive Configuration**: Prompts for hardware acceleration, codec, quality level (1-4), and max width
+- **Interactive Configuration**: Prompts for hardware acceleration, codec, quality level (0-4), and max width
 - **Hardware Acceleration**: Uses NVIDIA NVENC on Windows and Apple VideoToolbox on macOS with CPU fallback
-- **Smart Compression**: Keeps smaller MP4/PPTX media; explicit WebM and archive exports are retained even when larger
+- **Smart Compression**: Keeps smaller MP4/PPTX media; explicit WebM, AV1 and archive exports are retained even when larger
 - **Flexible Settings**: Customizable video resolution, codec choice, and quality levels
 - **Extensive Format Support**: Supports .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv and more
 - **Intelligent Naming**: Video files get descriptive suffixes with quality and codec info
@@ -40,10 +40,10 @@ PPTcrunch is a .NET 8 console application that compresses videos using quality-b
 
 ## Prerequisites
 
-1. **.NET 8 SDK** - Required for building the application from source
+1. **.NET 10 SDK** - Required for building the application from source
 2. **Internet connection** - Required for initial FFmpeg download on first run
 3. **Optional**: NVIDIA GPU drivers (version 416.34+ recommended for best GPU acceleration)
-4. **Optional**: macOS 11+ with Apple silicon for VideoToolbox hardware acceleration
+4. **Optional**: a supported macOS release (currently macOS 14, 15 or 26) with Apple silicon for VideoToolbox hardware acceleration
 
 ## Installation
 
@@ -213,7 +213,7 @@ Workflow:
    - Prompts with discrete options (e.g., 60, 50, 30, 25, 20, 15, 10, 5)
    - Default: 30 fps if available
 3. Resolution selection
-   - Lists only resolutions compatible with the chosen frame rate
+  -Lists only resolutions compatible with the chosen frame rate
    - Shows available compression formats for each resolution (e.g., "1920x1080 (YUV422, MJPEG)")
    - Default: 1920x1080 if available at the chosen frame rate
 4. Compression format selection
@@ -244,7 +244,7 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
 
 1. Compress the video file using your selected settings
 2. Generate a new file with quality and codec information in the filename
-3. Example: `video.mov` → `video - L2H264.mp4` (Quality level 2, H.264 codec)
+3. Example: `video.mov` → `video-L2H264.mp4` (Quality level 2, H.264 codec)
 4. Original file remains unchanged
 
 **For wildcard patterns**, the program will:
@@ -275,11 +275,17 @@ Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (dow
 - **2: H.265 / MP4** (default): better compression efficiency; requires HEVC playback support. CPU libx265, NVIDIA NVENC, or Apple VideoToolbox.
 - **3: WebM / VP9**: standalone video exports for modern laptop and phone browsers. CPU libvpx-vp9, Profile 0, 8-bit `yuv420p`, with Opus audio. Compatible Opus/Vorbis audio is copied. NVENC and VideoToolbox do not encode VP9, so selecting WebM always uses the CPU.
 
+- **4: AV1 / MP4**: standalone website video with 10-bit Main-profile YUV 4:2:0 and AAC audio, optimized for progressive download (`faststart`). CPU SVT-AV1 on Windows/macOS; optional AV1 NVENC on supported NVIDIA hardware (Ada/RTX 40-series and newer). The app verifies the actual AV1 hardware encoding path before offering it; GPU failure retries on the CPU. Apple VideoToolbox currently provides H.264/HEVC encoding here, not AV1 encoding. FFmpeg must include `libsvtav1` for CPU AV1.
+
+AV1 plays in current Chrome/Edge/Firefox on supported platforms; Safari requires AV1 decoding hardware, such as an M3-or-later Mac or iPhone 15 Pro. An M2 Mac or standard iPhone 15 can run a current browser yet lack Safari AV1 playback. See [WebKit's AV1 announcement](https://webkit.org/blog/14445/webkit-features-in-safari-17-0/). For that audience, publish a **separate** H.264 MP4 alternative and let the website select a supported source. PPTcrunch writes one codec per file; the browser does not need to download both encodings or extract alternate codecs from a combined file. Run each export from the original source.
+
+AV1 uses 10-bit output even for 8-bit input: extra precision can reduce rounding artifacts during lossy compression and scaling. It does not invent source detail or turn SDR into HDR. Local comparisons favored 10-bit; file-size savings are content-dependent. No film-grain synthesis or denoising is enabled. This is not a complete HDR mastering/tone-mapping workflow.
+
 WebM defaults to **two-pass encoding** for final website videos. Accept the default at the WebM prompt, then choose your quality level as usual. The first pass analyzes the original; the second reads the original again and writes the final video, so this does not add another lossy generation. One-pass encoding remains available: mostly static clips can be smaller in one pass because two-pass VP9 sometimes allocates extra bits to their detail. Neither mode guarantees the smallest possible file for every clip.
 
 WebM is supported in current Chrome, Edge, Firefox and Safari. iPhone/iPad playback requires iOS/iPadOS 17.4 or later; macOS Safari supports WebM from 14.1. For older devices use H.264. See [WebKit's compatibility announcement](https://webkit.org/blog/15063/webkit-features-in-safari-17-4/).
 
-PowerPoint and mixed PowerPoint/video batches offer MP4 codecs only. Run a separate standalone video batch to choose WebM. A hardware failure falls back to CPU encoding of the **same codec and user quality level**.
+PowerPoint and mixed PowerPoint/video batches offer H.264 and H.265 only. Run a separate standalone video batch to choose WebM or AV1. A hardware failure falls back to CPU encoding of the **same codec and user quality level**.
 
 ### Quality Level
 
@@ -318,9 +324,9 @@ Scaling uses Lanczos, avoids upscaling apart from the minimum 2-pixel encoder di
 
 - **Original file**: Remains unchanged (serves as backup)
 - **PPTX output**: New file with "-shrunk" suffix
-- **Video output**: New `.mp4` or `.webm` with user quality level and codec in the name (e.g., `name - L2H264.mp4`, `name - L2VP9.webm`). `L2` remains accurate after hardware fallback; old `Q...` names are still recognized.
+- **Video output**: New `.mp4` or `.webm` with user quality level and codec in the name (e.g., `name-L2H264.mp4`, `name-L2VP9.webm`, `name-L2AV1.mp4`). `L2` remains accurate after hardware fallback; old `Q...` names are still recognized.
 
-When a standalone video exceeds the selected maximum width, its output name also includes the reduced width: a 4K `foo.mpg` exported at the 1920-pixel limit becomes `foo - L2VP9-1920.webm`. Inputs already at or below that limit keep the usual name. Custom width limits use their resulting even output width in the same suffix. If FPS reduction changes the rate, the new FPS is appended before the extension: `foo - L2VP9-25FPS.webm`, or `foo - L2VP9-1920-25FPS.webm` when both change. Unchanged rates receive no FPS suffix. These names retain the delivery/Archive recompression safeguards.
+When a standalone video exceeds the selected maximum width, its output name also includes the reduced width: a 4K `foo.mpg` exported at the 1920-pixel limit becomes `foo-L2VP9-1920.webm`. Inputs already at or below that limit keep the usual name. Custom width limits use their resulting even output width in the same suffix. If FPS reduction changes the rate, the new FPS is appended before the extension: `foo-L2VP9-25FPS.webm`, or `foo-L2VP9-1920-25FPS.webm` when both change. Unchanged rates receive no FPS suffix. These names retain the delivery/Archive recompression safeguards.
 - **Temporary files**: Automatically cleaned up after processing
 
 ## Error Handling
@@ -335,17 +341,17 @@ When a standalone video exceeds the selected maximum width, its output name also
 
 - **Direct video mode (input)**: .mp4, .mpeg4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .mpg, .mpeg, .3gp, .3g2, .asf, .ogv
 - **PPTX-embedded videos**: Common media types found in `ppt/media` are processed as extracted files
-- **Output**: H.264/H.265 in MP4, or standalone VP9 in WebM.
+- **Output**: H.264/H.265 in MP4, standalone VP9 in WebM, or standalone AV1 in MP4.
 
 ### File Processing Modes
 
 1. **PPTX Mode**: Extracts videos from PowerPoint, compresses them, and repackages into a new PPTX file with `-shrunk` suffix
-2. **Video Mode**: Directly compresses individual video files with quality and codec information in filename (e.g., `video - L2H264.mp4`)
+2. **Video Mode**: Directly compresses individual video files with quality and codec information in filename (e.g., `video-L2H264.mp4`)
 3. **Batch Mode**: Process multiple files using wildcards (e.g., `*.mov`, `*.pptx`, `*.*`)
 
 ## Requirements
 
-- Windows x64 or macOS (Apple silicon) with the .NET 8 SDK for building (self-contained builds include the runtime)
+- Windows x64 or macOS (Apple silicon) with the .NET 10 SDK for building (self-contained builds include the runtime)
 - Internet connection for initial FFmpeg binary download (first run only)
 - Sufficient disk space for temporary files during processing
 - Write access to the FFmpeg cache directory (`C:\ffmpeg` on Windows, `~/Library/Application Support/PPTcrunch/ffmpeg` on macOS)
@@ -374,7 +380,7 @@ The application is organized into focused classes for maintainability:
 - **`Program.cs`** - Main entry point, command line handling, and user input collection
 - **`PPTXVideoProcessor.cs`** - Main processing orchestration and progress reporting
 - **`EmbeddedFFmpegRunner.cs`** - FFmpeg video compression with GPU/CPU acceleration and automatic binary download/management
-- **`FFmpegRunner.cs`** - Legacy external FFmpeg runner (replaced by automatic download version)
+- **`FFmpegRunner.cs`**-Legacy external FFmpeg runner (replaced by automatic download version)
 - **`FileManager.cs`** - File operations, ZIP handling, and cleanup
 - **`XmlReferenceUpdater.cs`** - Updates XML references when file extensions change
 - **`VideoFileInfo.cs`** - Data model for video file information
@@ -387,7 +393,7 @@ The program includes several improvements for reliability and performance:
 
 - **Hardware Acceleration**: NVIDIA NVENC (Windows) and Apple VideoToolbox (macOS) provide faster compression when available
 - **Automatic Fallback**: Falls back to CPU encoding if GPU is unavailable
-- **Smart File Size Checking**: Uses smaller MP4/PPTX media; retains requested WebM or archive output even if larger
+- **Smart File Size Checking**: Uses smaller MP4/PPTX media; retains requested WebM, AV1 or archive output even if larger
 - **Progress Feedback**: Shows real-time FFmpeg output during compression
 - **Improved Scaling**: Ensures even dimensions and preserves aspect ratio
 - **Error Recovery**: Gracefully handles compression failures and keeps original videos
@@ -399,7 +405,7 @@ The program uses intelligent decision-making for optimal results:
 1. **CPU by Default**: Uses software encoding for compression efficiency; NVIDIA/Apple hardware is optional
 2. **CPU Fallback**: Falls back to CPU encoding if hardware acceleration fails or is unavailable
 3. **Size Comparison**: Compares compressed file size to original after encoding
-4. **Output Policy**: MP4/PPTX delivery modes keep the smaller file. WebM and archive exports keep the requested format/quality, even when larger. Originals remain unchanged.
+4. **Output Policy**: H.264/H.265 MP4/PPTX delivery modes keep the smaller file. WebM, AV1 and archive exports keep the requested format/quality, even when larger. Originals remain unchanged.
 5. **XML Preservation**: Only updates XML references for files that actually changed extensions
 
 ## Progress Display
@@ -419,15 +425,17 @@ The **Enable frame-rate reduction?** option defaults to **N**, preserving the or
 
 Reduction uses timestamp-based frame selection at half the input rate before scaling, with the same filter in both VP9 passes. For constant-rate input this retains every other frame evenly, preserving sharp images and playback speed without blending or the uneven selection of 50→30. It still loses half the motion samples, so reduction is optional. Blending can soften or double moving edges; motion-compensated interpolation costs considerably more and can invent artifacts. Changed rates add a suffix such as `-25FPS` to standalone output filenames.
 
-| Level | H.264 CPU CRF | H.264 NVENC CQ | H.265 CPU CRF | H.265 NVENC CQ | Apple Q (both codecs) | VP9 CRF |
-|---|---:|---:|---:|---:|---:|---:|
-| 1: good/smaller | 26 | 29 | 28 | 28 | 50 | 34 |
-| 2: better/balanced | 22 | 26 | 24 | 26 | 65 | 30 |
-| 3: normal-playback transparency target | 20 | 23 | 22 | 23 | 75 | 28 |
-| 4: archive mode | 18 | 20 | 20 | 20 | 85 | 24 |
+| Level | H.264 CPU CRF | H.264 NVENC CQ | H.265 CPU CRF | H.265 NVENC CQ | Apple Q (both codecs) | VP9 CRF | AV1 CPU CRF | AV1 NVENC CQ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0: passable/minor artifacts | 28 | 32 | 30 | 31 | 40 | 38 | 38 | 31 |
+| 1: good/smaller | 26 | 29 | 28 | 28 | 50 | 34 | 34 | 28 |
+| 2: better/balanced | 22 | 26 | 24 | 26 | 65 | 30 | 30 | 26 |
+| 3: normal-playback transparency target | 20 | 23 | 22 | 23 | 75 | 28 | 26 | 23 |
+| 4: archive mode | 18 | 20 | 20 | 20 | 85 | 24 | 20 | 20 |
 
 Lower CRF/CQ means higher quality. **Higher Apple Q means higher quality**. Numbers on different encoders are not interchangeable or calibrated to identical perceived quality. Level 3 targets perceptually transparent animation at normal playback speed, size and viewing distance; it allows differences visible only when paused or magnified. It is not a guarantee for every source. Level 4 retains extra detail for a later delivery encode, rather than trying to improve normal-viewing appearance. Archive mode remains lossy and cannot recover detail already removed from an input. Fine text, motion, grain and gradients can need different settings. Standard outputs are 8-bit 4:2:0; HDR tone mapping, 10-bit preservation, alpha preservation and lossless export are not provided.
 
+- **AV1 CPU:** SVT-AV1 preset 4, visual-quality tuning (`tune=0`), single-pass CRF and a 240-frame maximum keyframe interval. Preset 4 favors efficiency without the much slower presets 0-3. AV1 NVENC uses P6/HQ, quality-targeted VBR, quarter-resolution multipass, 32-frame lookahead and adaptive quantization. Its CQ values are provisional starting points; AV1-capable NVIDIA hardware was not available for quality calibration.
 - **CPU H.264/H.265:** use `slow` at every quality level. The preset owns B-frames, reference frames and lookahead. `slower`/`veryslow` are excluded to avoid steep time costs. CRF controls quality; preset changes can affect both fidelity and size, so a slower preset does not invariably produce a smaller file at identical CRF.
 - **NVIDIA H.264/H.265:** explicit P6/HQ, quality-targeted VBR, 32-frame lookahead, spatial and temporal adaptive quantization, and quarter-resolution multipass. This multipass analyzes each frame; it is not a second traversal of the whole video. P7/full-resolution multipass are excluded as default choices. H.264 enables three B-frames. HEVC lets the hardware preset choose supported frame structures rather than forcing HEVC B-frames on older GPUs. Unsupported hardware/options trigger CPU CRF fallback.
 - **Apple H.264/H.265:** ascending Q 50/65/75/85, non-realtime encoding, no bitrate target and no implicit software fallback. Constant-quality VideoToolbox encoding requires Apple silicon; unsupported combinations fall back to CPU CRF. Apple does not expose x264/NVENC-style speed presets or lookahead controls here.
@@ -449,6 +457,9 @@ dotnet run --project tests/PPTcrunch.Tests.csproj -p:SelfContained=false -p:Publ
 
 # VP9 one/two-pass quality curves on the repository's local recordings and a moving pattern
 python tests/benchmark-vp9.py --ffmpeg C:/ffmpeg/ffmpeg.exe
+
+# AV1 bit-depth/preset/quality comparison on supplied local videos
+python tests/benchmark-av1.py --ffmpeg C:/ffmpeg/ffmpeg.exe sample.mkv
 ```
 
 Integration tests write their generated videos and measurements under `artifacts/encoding-tests`. Benchmarks use the first three seconds, scaled to 1280 pixels wide, and write results under `artifacts/preset-benchmark`. Short samples are useful checks, not universal quality or timing guarantees.
@@ -458,6 +469,20 @@ The VP9 benchmark separately uses up to four seconds at 1280 pixels wide and wri
 ## Technical Notes
 
 - PowerPoint media and XML references are updated together in a separate output presentation.
-- Successful standalone WebM exports and explicitly requested archive outputs are retained even when larger; the selected quality is never lowered just to beat the original size.
-- Filenames recognize both legacy `Q` values and new `L` user levels. An already-compressed video can be converted to another codec; same-codec delivery outputs are skipped to prevent accidental recompression. Archive outputs ending in `-L4H264.mp4`, `-L4H265.mp4` or `-L4VP9.webm` can be recompressed into levels 1-3, including the same codec. Same-codec archive-to-archive runs are skipped.
+- Successful standalone WebM/AV1 exports and explicitly requested archive outputs are retained even when larger; the selected quality is never lowered just to beat the original size.
+- Filenames recognize both legacy `Q` values and new `L` user levels. An already-compressed video can be converted to another codec; same-codec delivery outputs are skipped to prevent accidental recompression. Archive outputs ending in `-L4H264.mp4`, `-L4H265.mp4` `-L4VP9.webm` or `-L4AV1.mp4` can be recompressed into levels 0-3, including the same codec. Same-codec archive-to-archive runs are skipped.
 - FFmpeg errors and timeouts retain the original input; hardware failures retry with the selected software codec and quality level.
+
+AV1-specific real encoding tests use `--av1`; the integration matrix includes all five AV1 CPU levels. Use `--av1-nvenc` in addition to `--integration` only with working AV1 NVIDIA hardware. Existing `--nvenc` tests H.264/HEVC hardware without assuming AV1 support. AV1 requires a new build of PPTcrunch; the historical download links above do not include this change. Older SVT-AV1 builds can reject dimensions below 64 pixels; choose H.264/VP9 for such unusually small outputs. Each encode retains the existing 60-minute timeout.
+
+## Platform encoding audit
+
+[All 16 codec/platform/CPU-or-hardware combinations](PLATFORM_ENCODING_AUDIT.md) records the supported libraries, hardware paths, native-build considerations and validation limits. Hardware availability is tested with actual quality-mode encodes; an encoder listing or model-name guess alone is no longer sufficient. Windows acceleration means NVIDIA NVENC; macOS acceleration means VideoToolbox.
+
+Passable is level **0**, below Good (1), Better (2, still the default), normal-playback transparency (3), and Archive (4). Its filename marker is `L0`, preserving all existing level meanings. It targets smaller files with minor visible artifacts; content and viewing conditions determine how noticeable they are. All encoder speed presets remain unchanged. The capture/transcode quality menu also accepts levels 0-4.
+
+## .NET 10 migration
+
+App and test projects target `net10.0`. `global.json` selects a stable .NET 10 SDK (10.0.100 or a newer 10.0 feature band); self-contained releases bundle the runtime, so end users do not need a separate .NET installation. Rebuild Windows and macOS releases for this update; historical download links refer to older builds.
+
+The redundant `System.IO.Compression.ZipFile` package was removed because ZIP support is included in .NET. Newtonsoft.Json is explicitly pinned to 13.0.4 to replace the FFmpeg wrapper's vulnerable 9.0.1 transitive dependency. Existing FFmpeg wrapper versions and video encoding settings are unchanged.

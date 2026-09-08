@@ -8,12 +8,14 @@ public class GPUDetectionService
 {
     public class GPUInfo
     {
+        public HashSet<string> CpuEncoders { get; set; } = new(StringComparer.Ordinal);
         public bool HasNvidiaGPU { get; set; }
         public string GPUModel { get; set; } = string.Empty;
         public string DriverVersion { get; set; } = string.Empty;
         public bool SupportsNVENC { get; set; }
         public bool SupportsH264 { get; set; }
         public bool SupportsH265 { get; set; }
+        public bool SupportsAV1 { get; set; }
         public bool SupportsVideoToolbox { get; set; }
         public bool SupportsVideoToolboxH264 { get; set; }
         public bool SupportsVideoToolboxH265 { get; set; }
@@ -32,7 +34,7 @@ public class GPUDetectionService
 
         if (OperatingSystem.IsMacOS())
         {
-            gpuInfo.IsAppleSilicon = RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+            gpuInfo.IsAppleSilicon = RuntimeInformation.OSArchitecture == Architecture.Arm64;
             gpuInfo.CompatibilityProfile = gpuInfo.IsAppleSilicon ? "Apple Silicon" : "macOS";
         }
 
@@ -46,65 +48,81 @@ public class GPUDetectionService
             gpuInfo.DriverVersion = nvidiaInfo.DriverVersion;
         }
 
-        // Check FFmpeg encoder support
+        // Encoder listings describe the FFmpeg build, not usable hardware.
+        // Probe the platform's encoder with our actual quality-mode arguments.
         var encoderInfo = await CheckFFmpegEncoderSupportAsync();
-        gpuInfo.SupportsNVENC = encoderInfo.HasNvenc;
-        gpuInfo.SupportsVideoToolbox = encoderInfo.HasVideoToolbox;
-
-        if (encoderInfo.HasNvenc)
+        gpuInfo.CpuEncoders = encoderInfo.CpuEncoders;
+        var mode = PlatformHardware(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS());
+        if (mode == HardwareAccelerationMode.NvidiaNvenc)
         {
-            gpuInfo.SupportsH264 = encoderInfo.HasNvencH264;
-            gpuInfo.SupportsH265 = encoderInfo.HasNvencH265;
-            gpuInfo.HardwareAcceleration = HardwareAccelerationMode.NvidiaNvenc;
-        }
-        else if (encoderInfo.HasVideoToolbox)
-        {
-            gpuInfo.SupportsVideoToolboxH264 = encoderInfo.HasVideoToolboxH264;
-            gpuInfo.SupportsVideoToolboxH265 = encoderInfo.HasVideoToolboxH265;
-            gpuInfo.SupportsH264 = encoderInfo.HasVideoToolboxH264;
-            gpuInfo.SupportsH265 = encoderInfo.HasVideoToolboxH265;
-            gpuInfo.HardwareAcceleration = HardwareAccelerationMode.AppleVideoToolbox;
-            gpuInfo.IsSupported = true;
-            gpuInfo.CompatibilityProfile = gpuInfo.IsAppleSilicon ? "Apple Silicon VideoToolbox" : "Apple VideoToolbox";
-
-            if (string.IsNullOrWhiteSpace(gpuInfo.GPUModel))
+            gpuInfo.SupportsH264 = encoderInfo.HasNvencH264 && await ProbeHardwareAsync(VideoCodec.H264, mode);
+            gpuInfo.SupportsH265 = encoderInfo.HasNvencH265 && await ProbeHardwareAsync(VideoCodec.H265, mode);
+            gpuInfo.SupportsAV1 = encoderInfo.HasNvencAV1 && await ProbeHardwareAsync(VideoCodec.AV1, mode);
+            gpuInfo.SupportsNVENC = gpuInfo.SupportsH264 || gpuInfo.SupportsH265 || gpuInfo.SupportsAV1;
+            if (gpuInfo.SupportsNVENC)
             {
-                gpuInfo.GPUModel = gpuInfo.IsAppleSilicon ? "Apple Silicon" : "Apple GPU";
+                gpuInfo.HardwareAcceleration = mode;
+                gpuInfo.HasNvidiaGPU = true;
+                if (string.IsNullOrWhiteSpace(gpuInfo.GPUModel)) gpuInfo.GPUModel = "NVIDIA (verified by encoding)";
             }
-        }
-
-        // Use the comprehensive GPU capability detection from QualityConfigService
-        if (gpuInfo.HasNvidiaGPU && !string.IsNullOrEmpty(gpuInfo.GPUModel))
-        {
+            gpuInfo.CompatibilityProfile = DetermineGenerationName(gpuInfo.GPUModel);
+            // Model heuristics are descriptive only; never override failed probes.
             var capabilities = QualityConfigService.GetGPUCapabilities(gpuInfo.GPUModel);
-            if (capabilities != null)
-            {
-                gpuInfo.IsSupported = true;
-                gpuInfo.SupportsH265_10bit = capabilities.H265_10bit;
-                gpuInfo.MaxReferenceFrames = capabilities.MaxRefs;
-                gpuInfo.CompatibilityProfile = DetermineGenerationName(gpuInfo.GPUModel);
-
-                if (gpuInfo.SupportsNVENC)
-                {
-                    gpuInfo.HardwareAcceleration = HardwareAccelerationMode.NvidiaNvenc;
-                }
-
-                // Ensure codec support is at least what the capability system reports
-                // (FFmpeg detection might fail even if GPU supports it)
-                if (capabilities.SupportedCodecs.Contains("H264"))
-                    gpuInfo.SupportsH264 = true;
-                if (capabilities.SupportedCodecs.Contains("H265"))
-                    gpuInfo.SupportsH265 = true;
-            }
-            else
-            {
-                // GPU not supported by our encoding system (below GTX 1060)
-                gpuInfo.IsSupported = false;
-                gpuInfo.CompatibilityProfile = "Unsupported";
-            }
+            gpuInfo.SupportsH265_10bit = capabilities?.H265_10bit ?? false;
+            gpuInfo.MaxReferenceFrames = capabilities?.MaxRefs ?? 2;
         }
-
+        else if (mode == HardwareAccelerationMode.AppleVideoToolbox)
+        {
+            gpuInfo.SupportsH264 = encoderInfo.HasVideoToolboxH264 && await ProbeHardwareAsync(VideoCodec.H264, mode);
+            gpuInfo.SupportsH265 = encoderInfo.HasVideoToolboxH265 && await ProbeHardwareAsync(VideoCodec.H265, mode);
+            gpuInfo.SupportsVideoToolboxH264 = gpuInfo.SupportsH264;
+            gpuInfo.SupportsVideoToolboxH265 = gpuInfo.SupportsH265;
+            gpuInfo.SupportsVideoToolbox = gpuInfo.SupportsH264 || gpuInfo.SupportsH265;
+            if (gpuInfo.SupportsVideoToolbox) gpuInfo.HardwareAcceleration = mode;
+            gpuInfo.GPUModel = gpuInfo.IsAppleSilicon ? "Apple Silicon" : "Mac hardware";
+            gpuInfo.CompatibilityProfile = "Apple VideoToolbox quality mode";
+        }
+        gpuInfo.IsSupported = gpuInfo.SupportsHardwareAcceleration;
         return gpuInfo;
+    }
+
+    internal static HardwareAccelerationMode PlatformHardware(bool windows, bool macOS) =>
+        macOS ? HardwareAccelerationMode.AppleVideoToolbox : windows ? HardwareAccelerationMode.NvidiaNvenc : HardwareAccelerationMode.None;
+
+    internal static Task<bool> ProbeAv1NvencAsync() => ProbeHardwareAsync(VideoCodec.AV1, HardwareAccelerationMode.NvidiaNvenc);
+
+    internal static async Task<bool> ProbeHardwareAsync(VideoCodec codec, HardwareAccelerationMode mode)
+    {
+        if (mode == HardwareAccelerationMode.None || codec == VideoCodec.VP9 ||
+            (codec == VideoCodec.AV1 && mode == HardwareAccelerationMode.AppleVideoToolbox)) return false;
+        try
+        {
+            string path = await EmbeddedFFmpegRunner.GetFFmpegExecutablePathAsync() ?? "ffmpeg";
+            var settings = new UserSettings { Codec = codec };
+            var options = EncodingArguments.Build(settings, mode, videoOnly: true);
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                Arguments = "-hide_banner -nostdin -f lavfi -i color=size=640x360:rate=24:duration=2 " + string.Join(" ", options) + " -",
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            });
+            if (process == null) return false;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+                await Task.WhenAll(stdout, stderr);
+                return false;
+            }
+            await Task.WhenAll(stdout, stderr);
+            return process.ExitCode == 0;
+        }
+        catch { return false; }
     }
 
     private static async Task<bool> CheckNvidiaSmiAvailabilityAsync()
@@ -176,10 +194,10 @@ public class GPUDetectionService
 
     private class EncoderSupport
     {
-        public bool HasNvenc { get; init; }
+        public HashSet<string> CpuEncoders { get; init; } = new(StringComparer.Ordinal);
         public bool HasNvencH264 { get; init; }
         public bool HasNvencH265 { get; init; }
-        public bool HasVideoToolbox { get; init; }
+        public bool HasNvencAV1 { get; init; }
         public bool HasVideoToolboxH264 { get; init; }
         public bool HasVideoToolboxH265 { get; init; }
     }
@@ -209,8 +227,13 @@ public class GPUDetectionService
             using var process = Process.Start(startInfo);
             if (process == null) return new EncoderSupport();
 
-            string output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException) { process.Kill(true); await process.WaitForExitAsync(); await Task.WhenAll(stdout, stderr); return new EncoderSupport(); }
+            string output = await stdout;
+            await stderr;
 
             if (process.ExitCode == 0)
             {
@@ -221,10 +244,10 @@ public class GPUDetectionService
 
                 return new EncoderSupport
                 {
-                    HasNvenc = hasH264Nvenc || hasH265Nvenc,
+                    CpuEncoders = new HashSet<string>(new[] { "libx264", "libx265", "libvpx-vp9", "libsvtav1" }.Where(name => Regex.IsMatch(output, @"(?m)^\s*V\S*\s+" + Regex.Escape(name) + @"\s")), StringComparer.Ordinal),
                     HasNvencH264 = hasH264Nvenc,
                     HasNvencH265 = hasH265Nvenc,
-                    HasVideoToolbox = hasH264Vt || hasH265Vt,
+                    HasNvencAV1 = output.Contains("av1_nvenc"),
                     HasVideoToolboxH264 = hasH264Vt,
                     HasVideoToolboxH265 = hasH265Vt
                 };

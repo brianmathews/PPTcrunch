@@ -4,8 +4,8 @@ public class PPTXVideoProcessor
 {
     public async Task ProcessAsync(string pptxPath, UserSettings settings)
     {
-        if (settings.Codec == VideoCodec.VP9)
-            throw new NotSupportedException("WebM export is for standalone videos. Select H.264 or H.265 for PowerPoint.");
+        if (settings.StandaloneOnly)
+            throw new NotSupportedException("WebM and AV1 export are for standalone videos. Select H.264 or H.265 for PowerPoint.");
         Console.WriteLine($"Processing: {pptxPath}");
         Console.WriteLine("=".PadRight(50, '='));
 
@@ -108,17 +108,6 @@ public class PPTXVideoProcessor
                 continue;
             }
 
-            string nameWithoutExt = Path.GetFileNameWithoutExtension(video.OriginalFileName);
-
-            // Use the user quality level, which remains valid after a CPU fallback.
-            string outputFileName = $"{nameWithoutExt}-L{settings.QualityLevel}{settings.CodecSuffix}{settings.OutputExtension}";
-            string outputPath = Path.Combine(tempDir, outputFileName);
-
-            Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Compressing: {video.OriginalFileName} -> {outputFileName}");
-            Console.WriteLine($"Input: {video.TempOrigPath}");
-            Console.WriteLine($"Output: {outputPath}");
-            Console.WriteLine();
-
             var result = new VideoCompressionResult
             {
                 OriginalFileName = video.OriginalFileName,
@@ -127,6 +116,15 @@ public class PPTXVideoProcessor
 
             try
             {
+                int inputWidth = await EmbeddedFFmpegRunner.GetVideoWidthAsync(video.TempOrigPath);
+                double? inputRate = settings.ReduceHighFrameRates
+                    ? await EmbeddedFFmpegRunner.GetVideoFrameRateAsync(video.TempOrigPath) : null;
+                string outputFileName = Path.GetFileName(VideoProcessor.GenerateOutputFilename(video.OriginalFileName, settings, inputWidth, inputRate));
+                string outputPath = Path.Combine(tempDir, outputFileName);
+                Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Compressing: {video.OriginalFileName} -> {outputFileName}");
+                Console.WriteLine($"Input: {video.TempOrigPath}");
+                Console.WriteLine($"Output: {outputPath}");
+                Console.WriteLine();
                 var encodingResult = await EmbeddedFFmpegRunner.CompressVideoWithResultAsync(video.TempOrigPath, outputPath, settings);
                 if (encodingResult.Success && File.Exists(outputPath))
                 {

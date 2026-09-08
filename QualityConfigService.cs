@@ -21,6 +21,14 @@ public class QualityConfigService
         {
             QualityLevels = new Dictionary<string, QualityLevel>
             {
+                ["0"] = new QualityLevel
+                {
+                    Name = "Passable - smallest files; minor visible artifacts (target)",
+                    H264 = new CodecSettings { CPU = new EncodingSettings { Crf = 28, Preset = "slow" }, GPU = NvencSettings(32, 40) },
+                    H265 = new CodecSettings { CPU = new EncodingSettings { Crf = 30, Preset = "slow" }, GPU = NvencSettings(31, 40) },
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 38, CpuUsed = 2 } },
+                    AV1 = new CodecSettings { CPU = new EncodingSettings { Crf = 38, Preset = "4" }, GPU = NvencSettings(31, 40) }
+                },
                 ["1"] = new QualityLevel
                 {
                     Name = "Good - smaller files",
@@ -34,7 +42,8 @@ public class QualityConfigService
                         CPU = new EncodingSettings { Crf = 28, Preset = "slow" },
                         GPU = NvencSettings(28, 50)
                     },
-                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 34, CpuUsed = 2 } }
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 34, CpuUsed = 2 } },
+                    AV1 = new CodecSettings { CPU = new EncodingSettings { Crf = 34, Preset = "4" }, GPU = NvencSettings(28, 50) }
                 },
                 ["2"] = new QualityLevel
                 {
@@ -49,7 +58,8 @@ public class QualityConfigService
                         CPU = new EncodingSettings { Crf = 24, Preset = "slow" },
                         GPU = NvencSettings(26, 65)
                     },
-                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 30, CpuUsed = 2 } }
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 30, CpuUsed = 2 } },
+                    AV1 = new CodecSettings { CPU = new EncodingSettings { Crf = 30, Preset = "4" }, GPU = NvencSettings(26, 65) }
                 },
                 ["3"] = new QualityLevel
                 {
@@ -64,7 +74,8 @@ public class QualityConfigService
                         CPU = new EncodingSettings { Crf = 22, Preset = "slow" },
                         GPU = NvencSettings(23, 75)
                     },
-                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 28, CpuUsed = 2 } }
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 28, CpuUsed = 2 } },
+                    AV1 = new CodecSettings { CPU = new EncodingSettings { Crf = 26, Preset = "4" }, GPU = NvencSettings(23, 75) }
                 },
                 ["4"] = new QualityLevel
                 {
@@ -79,7 +90,8 @@ public class QualityConfigService
                         CPU = new EncodingSettings { Crf = 20, Preset = "slow" },
                         GPU = NvencSettings(20, 85)
                     },
-                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 24, CpuUsed = 2 } }
+                    VP9 = new CodecSettings { CPU = new EncodingSettings { Crf = 24, CpuUsed = 2 } },
+                    AV1 = new CodecSettings { CPU = new EncodingSettings { Crf = 20, Preset = "4" }, GPU = NvencSettings(20, 85) }
                 }
             },
             CodecSettings = new CodecSettingsConfig
@@ -96,7 +108,8 @@ public class QualityConfigService
                     GPU = new CodecParams { Profile = "main", Tag = "hvc1" },
                     CPU = new CodecParams { Profile = "main", Tag = "hvc1" }
                 },
-                VP9 = new CodecSpecificSettings { CPU = new CodecParams { Profile = "0" } }
+                VP9 = new CodecSpecificSettings { CPU = new CodecParams { Profile = "0" } },
+                AV1 = new CodecSpecificSettings { CPU = new CodecParams { Profile = "0", Tag = "av01" }, GPU = new CodecParams { Profile = "0", Tag = "av01" } }
             }
         };
     }
@@ -205,6 +218,7 @@ public class QualityConfigService
             VideoCodec.H264 => level.H264,
             VideoCodec.H265 => level.H265,
             VideoCodec.VP9 => level.VP9,
+            VideoCodec.AV1 => level.AV1,
             _ => throw new ArgumentOutOfRangeException(nameof(codec))
         };
         if (codec == VideoCodec.VP9) return codecSettings.CPU;
@@ -219,6 +233,7 @@ public class QualityConfigService
             VideoCodec.H264 => config.CodecSettings.H264,
             VideoCodec.H265 => config.CodecSettings.H265,
             VideoCodec.VP9 => config.CodecSettings.VP9,
+            VideoCodec.AV1 => config.CodecSettings.AV1,
             _ => throw new ArgumentOutOfRangeException(nameof(codec))
         };
         if (codec == VideoCodec.VP9) return codecSettings.CPU;
@@ -241,6 +256,7 @@ public class QualityLevel
     public CodecSettings H264 { get; set; } = new();
     public CodecSettings H265 { get; set; } = new();
     public CodecSettings VP9 { get; set; } = new();
+    public CodecSettings AV1 { get; set; } = new();
 }
 
 public class CodecSettings
@@ -267,6 +283,7 @@ public class CodecSettingsConfig
     public CodecSpecificSettings H264 { get; set; } = new();
     public CodecSpecificSettings H265 { get; set; } = new();
     public CodecSpecificSettings VP9 { get; set; } = new();
+    public CodecSpecificSettings AV1 { get; set; } = new();
 }
 
 public class CodecSpecificSettings

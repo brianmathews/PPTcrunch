@@ -5,7 +5,7 @@ public static class EncodingArguments
 {
     public static List<string> Build(UserSettings settings, HardwareAccelerationMode hardware, bool videoOnly = false, double? inputFrameRate = null)
     {
-        if (settings.Codec == VideoCodec.VP9) hardware = HardwareAccelerationMode.None;
+        if (settings.Codec == VideoCodec.VP9 || (settings.Codec == VideoCodec.AV1 && hardware == HardwareAccelerationMode.AppleVideoToolbox)) hardware = HardwareAccelerationMode.None;
         var encoding = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, hardware != HardwareAccelerationMode.None);
         var codec = QualityConfigService.GetCodecParams(settings.Codec, hardware != HardwareAccelerationMode.None);
         // A single scale operation; no upscaling, both dimensions at least two and even.
@@ -20,7 +20,7 @@ public static class EncodingArguments
         {
             "-map", "0:v:0", "-sn", "-dn",
             "-vf", $"\"{filters}\"",
-            "-pix_fmt", "yuv420p", "-profile:v", codec.Profile, "-fps_mode", "passthrough"
+            "-pix_fmt", settings.Codec == VideoCodec.AV1 ? (hardware == HardwareAccelerationMode.NvidiaNvenc ? "p010le" : "yuv420p10le") : "yuv420p", "-profile:v", codec.Profile, "-fps_mode", "passthrough"
         };
         if (videoOnly) args.Add("-an");
         else args.AddRange(new[] { "-map", "0:a?" });
@@ -29,7 +29,7 @@ public static class EncodingArguments
             case HardwareAccelerationMode.NvidiaNvenc:
                 args.AddRange(new[]
                 {
-                    "-c:v", settings.Codec == VideoCodec.H264 ? "h264_nvenc" : "hevc_nvenc",
+                    "-c:v", settings.Codec switch { VideoCodec.H264 => "h264_nvenc", VideoCodec.H265 => "hevc_nvenc", VideoCodec.AV1 => "av1_nvenc", _ => throw new NotSupportedException() },
                     "-rc", encoding.Rc, "-cq", $"{encoding.Cq}", "-b:v", "0",
                     "-preset", encoding.Preset, "-tune", encoding.Tune,
                     "-multipass", $"{encoding.Multipass}", "-rc-lookahead", $"{encoding.Lookahead}",
@@ -51,6 +51,9 @@ public static class EncodingArguments
                 if (settings.Codec == VideoCodec.VP9)
                     args.AddRange(new[] { "-b:v", "0", "-deadline", "good", "-cpu-used", $"{encoding.CpuUsed}",
                         "-row-mt", "1", "-lag-in-frames", "25", "-g", "240" });
+                else if (settings.Codec == VideoCodec.AV1)
+                    // Single-pass CRF with visual-quality tuning; no fixed bitrate budget.
+                    args.AddRange(new[] { "-preset", encoding.Preset, "-svtav1-params", "tune=0", "-g", "240" });
                 else
                     // Let the preset choose B-frames, references and lookahead together.
                     args.AddRange(new[] { "-preset", encoding.Preset });

@@ -77,7 +77,7 @@ class Program
             }
 
             // Collect user settings
-            var settings = await CollectUserSettingsAsync(systemCheckResult, allowWebM: pptxFiles.Count == 0);
+            var settings = await CollectUserSettingsAsync(systemCheckResult, allowWebCodecs: pptxFiles.Count == 0);
 
             // Process files
             int successCount = 0;
@@ -202,6 +202,7 @@ class Program
                     Console.WriteLine("      ✓ H.264 encoding supported");
                 if (result.GPUInfo.SupportsH265)
                     Console.WriteLine("      ✓ H.265 encoding supported");
+                Console.WriteLine(result.GPUInfo.SupportsAV1 ? "      AV1 encoding verified" : "      AV1 encoding uses CPU on this GPU");
                 break;
             case HardwareAccelerationMode.AppleVideoToolbox:
                 Console.WriteLine("  ✓ Apple VideoToolbox hardware acceleration detected");
@@ -246,7 +247,7 @@ class Program
         return result;
     }
 
-    private static Task<UserSettings> CollectUserSettingsAsync(SystemCheckResult systemCheck, bool allowWebM)
+    private static Task<UserSettings> CollectUserSettingsAsync(SystemCheckResult systemCheck, bool allowWebCodecs)
     {
         var settings = new UserSettings();
 
@@ -281,17 +282,20 @@ class Program
         Console.WriteLine("Video codec options:");
         Console.WriteLine("  1. H.264 / MP4 (broadest compatibility, including older devices)");
         Console.WriteLine("  2. H.265 / MP4 (smaller files, requires HEVC playback support)");
-        if (allowWebM)
+        if (allowWebCodecs)
+        {
             Console.WriteLine("  3. WebM / VP9 (final website videos, two-pass CPU encoding)");
+            Console.WriteLine("  4. AV1 / MP4 (efficient website video; CPU or supported NVIDIA GPU)");
+        }
         else
-            Console.WriteLine("  WebM is available for standalone video batches; PowerPoint batches require MP4.");
+            Console.WriteLine("  WebM and AV1 are available for standalone videos; PowerPoint batches use H.264 or H.265.");
 
         while (true)
         {
-            Console.Write(allowWebM ? "Enter your choice (1-3, default: 2): " : "Enter your choice (1 or 2, default: 2): ");
+            Console.Write(allowWebCodecs ? "Enter your choice (1-4, default: 2): " : "Enter your choice (1 or 2, default: 2): ");
             string? codecInput = Console.ReadLine()?.Trim();
             if (string.IsNullOrEmpty(codecInput)) break;
-            if (int.TryParse(codecInput, out int choice) && choice >= 1 && choice <= (allowWebM ? 3 : 2))
+            if (int.TryParse(codecInput, out int choice) && choice >= 1 && choice <= (allowWebCodecs ? 4 : 2))
             {
                 settings.Codec = (VideoCodec)choice;
                 break;
@@ -311,11 +315,23 @@ class Program
             settings.UseVp9TwoPass = passInput != "n" && passInput != "no";
         }
         else if (settings.UseGPUAcceleration &&
-                 !(settings.Codec == VideoCodec.H264 ? systemCheck.GPUInfo.SupportsH264 : systemCheck.GPUInfo.SupportsH265))
+                 !(settings.Codec switch { VideoCodec.H264 => systemCheck.GPUInfo.SupportsH264, VideoCodec.H265 => systemCheck.GPUInfo.SupportsH265, VideoCodec.AV1 => systemCheck.GPUInfo.SupportsAV1, _ => false }))
         {
             Console.WriteLine("The selected codec will use CPU encoding because it is unavailable on this hardware.");
             settings.UseGPUAcceleration = false;
             settings.HardwareAcceleration = HardwareAccelerationMode.None;
+        }
+        if (settings.Codec == VideoCodec.AV1)
+        {
+            Console.WriteLine("AV1 uses MP4 with 10-bit Main-profile video and AAC audio for web delivery.");
+            Console.WriteLine("Safari AV1 playback requires an AV1-capable device (for example, iPhone 15 Pro or an M3 Mac).");
+            Console.WriteLine("macOS uses CPU AV1 encoding. CPU encoding favors quality and small files over speed.");
+        }
+        if (!systemCheck.GPUInfo.CpuEncoders.Contains(settings.GetCpuCodecName()))
+        {
+            if (!settings.UseGPUAcceleration)
+                throw new NotSupportedException($"This FFmpeg build did not report the required encoder {settings.GetCpuCodecName()}. Install a full native FFmpeg build containing that encoder.");
+            Console.WriteLine($"CPU fallback is unavailable: this FFmpeg build lacks {settings.GetCpuCodecName()}.");
         }
         // Quality level
         Console.WriteLine();
@@ -325,9 +341,9 @@ class Program
         {
             Console.WriteLine($"  {kvp.Key}. {kvp.Value.Name}");
         }
-        Console.Write("Enter your choice (1-4, default: 2): ");
+        Console.Write("Enter your choice (0-4, default: 2): ");
         string? qualityInput = Console.ReadLine()?.Trim();
-        if (!string.IsNullOrEmpty(qualityInput) && int.TryParse(qualityInput, out int qualityLevel) && qualityLevel >= 1 && qualityLevel <= 4)
+        if (!string.IsNullOrEmpty(qualityInput) && int.TryParse(qualityInput, out int qualityLevel) && qualityLevel >= 0 && qualityLevel <= 4)
         {
             settings.QualityLevel = qualityLevel;
         }
@@ -402,7 +418,7 @@ class Program
         Console.WriteLine("Output:");
         Console.WriteLine("  - PPTX files: Creates new file with '-shrunk' suffix");
         Console.WriteLine("  - Video files: Creates new file with quality and codec suffix");
-        Console.WriteLine("    Examples: video.mov → video - L2H264.mp4 or video - L2VP9.webm");
+        Console.WriteLine("    Examples: video.mov → video-L2H264.mp4 or video-L2VP9.webm or video-L2AV1.mp4");
     }
 
     private static List<string> ExpandFilePattern(string pattern)

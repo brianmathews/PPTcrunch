@@ -268,9 +268,9 @@ public static class CaptureMode
             {
                 Console.WriteLine($"  {kvp.Key}. {kvp.Value.Name}");
             }
-            Console.Write("Enter your choice (1-3, default: 2): ");
+            Console.Write("Enter your choice (0-4, default: 2): ");
             string? qInput = Console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(qInput) && int.TryParse(qInput, out int qLevel) && qLevel >= 1 && qLevel <= 3)
+            if (!string.IsNullOrEmpty(qInput) && int.TryParse(qInput, out int qLevel) && qLevel >= 0 && qLevel <= 4)
             {
                 settings.QualityLevel = qLevel;
             }

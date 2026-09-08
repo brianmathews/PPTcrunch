@@ -4,14 +4,16 @@ public class UserSettings
 {
     public int MaxWidth { get; set; } = 1920;
     public VideoCodec Codec { get; set; } = VideoCodec.H265;
-    public int QualityLevel { get; set; } = 2; // 1=Good, 2=Better, 3=Normal-viewing transparency target, 4=Archive
+    public int QualityLevel { get; set; } = 2; // 0=Passable, 1=Good, 2=Better, 3=Normal-viewing transparency target, 4=Archive
     public bool UseGPUAcceleration { get; set; } = false;
     public bool UseVp9TwoPass { get; set; } = true;
     public bool ReduceHighResTo1920 { get; set; } = true;
     public bool ReduceHighFrameRates { get; set; } = false;
     public HardwareAccelerationMode HardwareAcceleration { get; set; } = HardwareAccelerationMode.None;
     public HardwareAccelerationMode EffectiveHardwareAcceleration =>
-        UseGPUAcceleration && Codec != VideoCodec.VP9 ? HardwareAcceleration : HardwareAccelerationMode.None;
+        UseGPUAcceleration && Codec != VideoCodec.VP9 &&
+        !(Codec == VideoCodec.AV1 && HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox) ? HardwareAcceleration : HardwareAccelerationMode.None;
+    public bool StandaloneOnly => Codec is VideoCodec.VP9 or VideoCodec.AV1;
     public string OutputExtension => Codec == VideoCodec.VP9 ? ".webm" : ".mp4";
     public string CodecSuffix => Codec.ToString();
 
@@ -51,6 +53,7 @@ public class UserSettings
             VideoCodec.H264 => "libx264",
             VideoCodec.H265 => "libx265",
             VideoCodec.VP9 => "libvpx-vp9",
+            VideoCodec.AV1 => "libsvtav1",
             _ => "libx264"
         };
     }
@@ -59,6 +62,9 @@ public class UserSettings
     {
         if (Codec == VideoCodec.VP9)
             throw new NotSupportedException("VP9 uses the CPU libvpx-vp9 encoder; NVENC and VideoToolbox do not encode VP9.");
+        if (Codec == VideoCodec.AV1)
+            return HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox
+                ? throw new NotSupportedException("AV1 uses CPU encoding on macOS.") : "av1_nvenc";
         return HardwareAcceleration switch
         {
             HardwareAccelerationMode.AppleVideoToolbox => Codec switch
@@ -88,6 +94,7 @@ public class UserSettings
         {
             VideoCodec.H264 => "H.264 (better compatibility, standard quality)",
             VideoCodec.H265 => "H.265 (smaller files, newer standard, may not work on older systems)",
+            VideoCodec.AV1 => "AV1 / MP4 (efficient website video; provide H.264 fallback for unsupported devices)",
             VideoCodec.VP9 => "WebM / VP9 (modern web browsers, CPU encoding, standalone videos only)",
             _ => "H.264"
         };
@@ -111,7 +118,8 @@ public enum VideoCodec
 {
     H264 = 1,
     H265 = 2,
-    VP9 = 3
+    VP9 = 3,
+    AV1 = 4
 }
 
 public enum HardwareAccelerationMode

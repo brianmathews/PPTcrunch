@@ -11,7 +11,7 @@ static void Check(bool condition, string message)
 foreach (var codec in Enum.GetValues<VideoCodec>())
 {
     int lastCrf = 100, lastCq = 100, lastApple = 0;
-    for (int level = 1; level <= 4; level++)
+    for (int level = 0; level <= 4; level++)
     {
         var settings = new UserSettings { Codec = codec, QualityLevel = level };
         var cpu = QualityConfigService.GetEncodingSettings(level, codec, false);
@@ -21,7 +21,7 @@ foreach (var codec in Enum.GetValues<VideoCodec>())
         {
             var options = string.Join(" ", EncodingArguments.Build(settings, mode));
             Check(!options.Contains("-maxrate") && !options.Contains("-minrate"), "No video bitrate caps/floors");
-            Check(options.Contains("-pix_fmt yuv420p"), "Browser pixel format");
+            Check(options.Contains(codec == VideoCodec.AV1 ? (mode == HardwareAccelerationMode.NvidiaNvenc ? "-pix_fmt p010le" : "-pix_fmt yuv420p10le") : "-pix_fmt yuv420p"), "Browser pixel format");
             Check(options.Contains("-map 0:a?"), "Silent inputs and audio tracks supported");
             if (codec == VideoCodec.VP9)
             {
@@ -29,7 +29,7 @@ foreach (var codec in Enum.GetValues<VideoCodec>())
                 Check(options.Contains("-profile:v 0") && options.Contains("-c:a libopus"), "WebM video/audio compatibility");
                 Check(!options.Contains("-preset") && !options.Contains("hvc1") && !options.Contains("faststart"), "No H26x flags in WebM");
             }
-            else if (mode == HardwareAccelerationMode.None)
+            else if (mode == HardwareAccelerationMode.None || (codec == VideoCodec.AV1 && mode == HardwareAccelerationMode.AppleVideoToolbox))
             {
                 Check(options.Contains("-preset " + cpu.Preset), "Configured CPU preset honored");
                 Check(!options.Contains("-bf") && !options.Contains("-refs"), "CPU preset owns frame decisions");
@@ -50,24 +50,52 @@ foreach (var codec in Enum.GetValues<VideoCodec>())
         }
     }
 }
+// The full OS x codec x CPU/hardware routing matrix (16 combinations).
+foreach (bool mac in new[] { false, true })
+foreach (var codec in Enum.GetValues<VideoCodec>())
+foreach (bool accelerated in new[] { false, true })
+{
+    var platform = GPUDetectionService.PlatformHardware(!mac, mac);
+    var setting = new UserSettings { Codec = codec, UseGPUAcceleration = accelerated, HardwareAcceleration = platform };
+    bool shouldAccelerate = accelerated && codec != VideoCodec.VP9 && !(mac && codec == VideoCodec.AV1);
+    Check((setting.EffectiveHardwareAcceleration != HardwareAccelerationMode.None) == shouldAccelerate, "Platform hardware policy");
+    string options = string.Join(" ", EncodingArguments.Build(setting, setting.EffectiveHardwareAcceleration));
+    string encoder = !shouldAccelerate ? setting.GetCpuCodecName() : mac
+        ? (codec == VideoCodec.H264 ? "h264_videotoolbox" : "hevc_videotoolbox")
+        : codec switch { VideoCodec.H264 => "h264_nvenc", VideoCodec.H265 => "hevc_nvenc", _ => "av1_nvenc" };
+    Check(options.Contains("-c:v " + encoder + " "), $"Correct platform encoder: {mac}/{codec}/{accelerated}");
+}
+var av1Settings = new UserSettings { Codec = VideoCodec.AV1, UseGPUAcceleration = true, HardwareAcceleration = HardwareAccelerationMode.AppleVideoToolbox };
+Check(av1Settings.EffectiveHardwareAcceleration == HardwareAccelerationMode.None, "AV1 uses CPU on Apple");
+Check(av1Settings.OutputExtension == ".mp4" && av1Settings.StandaloneOnly, "AV1 MP4 standalone policy");
+Check(string.Join(" ", EncodingArguments.Build(av1Settings, HardwareAccelerationMode.AppleVideoToolbox)).Contains("-svtav1-params tune=0"), "AV1 perceptual CPU tuning");
+foreach (var codec in Enum.GetValues<VideoCodec>())
+{
+    var passable = new UserSettings { Codec = codec, QualityLevel = 0, ReduceHighFrameRates = true };
+    string name = VideoProcessor.GenerateOutputFilename("foo.mpg", passable, 3840, 50);
+    Check(name == $"foo-L0{codec}-1920-25FPS{passable.OutputExtension}", "Passable filename with size/FPS modifiers");
+    Check(VideoProcessor.ShouldSkipRecompression(name, passable), "Protect Passable delivery outputs");
+    Check(!VideoProcessor.ShouldSkipRecompression($"foo-L4{codec}{passable.OutputExtension}", passable), "Archive can become Passable");
+}
 var webSettings = new UserSettings { Codec = VideoCodec.VP9, UseGPUAcceleration = true, HardwareAcceleration = HardwareAccelerationMode.NvidiaNvenc };
 Check(webSettings.EffectiveHardwareAcceleration == HardwareAccelerationMode.None, "VP9 bypasses GPU");
 Check(webSettings.UseVp9TwoPass, "Final website exports default to two passes");
-Check(VideoProcessor.GenerateOutputFilename("input.mov", webSettings) == "input - L2VP9.webm", "WebM filename");
+Check(VideoProcessor.GenerateOutputFilename("input.mov", webSettings) == "input-L2VP9.webm", "WebM filename");
 foreach (var codec in Enum.GetValues<VideoCodec>())
 {
     var naming = new UserSettings { Codec = codec };
-    Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840) == $"foo - L2{naming.CodecSuffix}-1920{naming.OutputExtension}", "Downscaled output includes width");
+    Check(VideoProcessor.GenerateOutputFilename("my video.mpg", naming) == $"my video-L2{naming.CodecSuffix}{naming.OutputExtension}", "Preserve original spaces; add none in suffix");
+    Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840) == $"foo-L2{naming.CodecSuffix}-1920{naming.OutputExtension}", "Downscaled output includes width");
     foreach (int width in new[] { 1280, 1919, 1920 })
-        Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, width) == $"foo - L2{naming.CodecSuffix}{naming.OutputExtension}", "Inputs within the limit have no resolution suffix");
+        Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, width) == $"foo-L2{naming.CodecSuffix}{naming.OutputExtension}", "Inputs within the limit have no resolution suffix");
     naming.MaxWidth = int.MaxValue;
-    Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840) == $"foo - L2{naming.CodecSuffix}{naming.OutputExtension}", "Unrestricted exports have no resolution suffix");
+    Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840) == $"foo-L2{naming.CodecSuffix}{naming.OutputExtension}", "Unrestricted exports have no resolution suffix");
     naming.ReduceHighFrameRates = true;
-    string fpsName = $"foo - L2{naming.CodecSuffix}-25FPS{naming.OutputExtension}";
+    string fpsName = $"foo-L2{naming.CodecSuffix}-25FPS{naming.OutputExtension}";
     Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840, 50) == fpsName, "Changed FPS appears in filename");
     Check(VideoProcessor.ShouldSkipRecompression(fpsName, naming), "Protect FPS-modified delivery exports");
     naming.MaxWidth = 1920;
-    string bothName = $"foo - L2{naming.CodecSuffix}-1920-25FPS{naming.OutputExtension}";
+    string bothName = $"foo-L2{naming.CodecSuffix}-1920-25FPS{naming.OutputExtension}";
     Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 3840, 50) == bothName, "Resolution then FPS suffix");
     Check(VideoProcessor.ShouldSkipRecompression(bothName, naming), "Recognize combined suffixes");
     foreach (double rate in new[] { 24, 40, 49, 59.94 })
@@ -75,7 +103,7 @@ foreach (var codec in Enum.GetValues<VideoCodec>())
     Check(VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 1920, 120).Contains("-60FPS"), "Label actual halved FPS above 30");
     naming.ReduceHighFrameRates = false;
     Check(!VideoProcessor.GenerateOutputFilename("foo.mpg", naming, 1920, 50).Contains("FPS"), "Disabled reduction has no FPS suffix");
-    string archiveName = $"foo - L4{naming.CodecSuffix}-1920-25FPS{naming.OutputExtension}";
+    string archiveName = $"foo-L4{naming.CodecSuffix}-1920-25FPS{naming.OutputExtension}";
     Check(!VideoProcessor.ShouldSkipRecompression(archiveName, naming), "FPS-modified archive remains reusable for delivery");
     naming.QualityLevel = 4;
     Check(VideoProcessor.ShouldSkipRecompression(archiveName, naming), "Protect FPS-modified archive-to-archive exports");
@@ -114,6 +142,18 @@ catch (NotSupportedException) { }
 Console.WriteLine("PASS: encoder quality, compatibility, routing, filenames and PowerPoint guard.");
 await Vp9WorkflowTests.RunAsync();
 
+if (args.Contains("--platform"))
+{
+    var detected = await GPUDetectionService.DetectGPUCapabilitiesAsync();
+    foreach (var codec in Enum.GetValues<VideoCodec>())
+        Check(detected.CpuEncoders.Contains(new UserSettings { Codec = codec }.GetCpuCodecName()), "Required software encoder present: " + codec);
+    if (args.Contains("--nvenc") && OperatingSystem.IsWindows())
+        Check(detected.SupportsH264 && detected.SupportsH265, "Known NVENC machine must pass both H26x quality probes");
+    Check(detected.IsSupported == detected.SupportsHardwareAcceleration, "Usable hardware determines supported status");
+    Check(await EmbeddedFFmpegRunner.CheckNVENCAvailabilityAsync() == detected.SupportsH264 || !OperatingSystem.IsWindows(), "Legacy and current NVENC probes agree");
+    Console.WriteLine($"PASS: platform probe: {detected.HardwareAcceleration}; H264={detected.SupportsH264}, H265={detected.SupportsH265}, AV1={detected.SupportsAV1}; all CPU libraries present.");
+}
+if (args.Contains("--av1")) await Av1WorkflowTests.RunAsync();
 if (!args.Contains("--integration")) return;
 string ffmpeg = await EmbeddedFFmpegRunner.GetFFmpegExecutablePathAsync() ?? throw new Exception("FFmpeg missing");
 string ffprobe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe");
@@ -138,12 +178,12 @@ string source = Path.Combine(artifacts, "source.mkv");
 await Run(ffmpeg, $"-v error -f lavfi -i testsrc2=size=640x360:rate=24:duration=4 -f lavfi -i sine=frequency=440:duration=4 -c:v ffv1 -c:a pcm_s16le -y \"{source}\"");
 var measurements = new List<object>();
 foreach (var codec in Enum.GetValues<VideoCodec>())
-foreach (var hardware in codec == VideoCodec.VP9 || !args.Contains("--nvenc")
+foreach (var hardware in codec == VideoCodec.VP9 || (codec == VideoCodec.AV1 ? !args.Contains("--av1-nvenc") : !args.Contains("--nvenc"))
     ? new[] { HardwareAccelerationMode.None } : new[] { HardwareAccelerationMode.None, HardwareAccelerationMode.NvidiaNvenc })
 {
     double previousPsnr = 0;
     long previousSize = 0;
-    for (int level = 1; level <= 4; level++)
+    for (int level = 0; level <= 4; level++)
     {
         var settings = new UserSettings { Codec = codec, QualityLevel = level, HardwareAcceleration = hardware, UseGPUAcceleration = hardware != HardwareAccelerationMode.None };
         string output = Path.Combine(artifacts, $"{codec}-{hardware}-{level}{settings.OutputExtension}");
@@ -154,9 +194,10 @@ foreach (var hardware in codec == VideoCodec.VP9 || !args.Contains("--nvenc")
         using var probe = JsonDocument.Parse(await Run(ffprobe, $"-v error -show_streams -show_format -of json \"{output}\""));
         var streams = probe.RootElement.GetProperty("streams").EnumerateArray().ToArray();
         var video = streams.First(s => s.GetProperty("codec_type").GetString() == "video");
-        Check(video.GetProperty("codec_name").GetString() == (codec == VideoCodec.H264 ? "h264" : codec == VideoCodec.H265 ? "hevc" : "vp9"), "Actual codec");
-        Check(video.GetProperty("pix_fmt").GetString() == "yuv420p", "Actual pixel format");
+        Check(video.GetProperty("codec_name").GetString() == (codec == VideoCodec.H264 ? "h264" : codec == VideoCodec.H265 ? "hevc" : codec == VideoCodec.AV1 ? "av1" : "vp9"), "Actual codec");
+        Check(video.GetProperty("pix_fmt").GetString() == (codec == VideoCodec.AV1 ? "yuv420p10le" : "yuv420p"), "Actual pixel format");
         Check(streams.First(s => s.GetProperty("codec_type").GetString() == "audio").GetProperty("codec_name").GetString() == (codec == VideoCodec.VP9 ? "opus" : "aac"), "Playable audio");
+        if (codec == VideoCodec.AV1) Check(video.GetProperty("codec_tag_string").GetString() == "av01" && video.GetProperty("profile").GetString() == "Main", "AV1 web profile/tag");
         if (codec == VideoCodec.VP9) Check(video.GetProperty("profile").GetString() == "Profile 0", "VP9 Profile 0");
         // Compare matching frame indices: MP4 and Matroska round timestamps to
         // different time bases, so STARTPTS alone can compare adjacent frames.

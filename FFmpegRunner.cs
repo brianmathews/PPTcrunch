@@ -61,7 +61,7 @@ public class FFmpegRunner
             {
                 Console.WriteLine("  - FFmpeg not compiled with NVENC support");
                 Console.WriteLine("  - NVIDIA GPU drivers not installed or outdated");
-                Console.WriteLine("  - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
+                Console.WriteLine("  - GPU doesn't support this codec (AV1 requires Ada/RTX 40-series or newer supported hardware)");
                 Console.WriteLine("  - GPU is busy with other tasks");
             }
             else if (settings.HardwareAcceleration == HardwareAccelerationMode.AppleVideoToolbox)

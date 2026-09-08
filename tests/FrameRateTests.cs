@@ -58,7 +58,7 @@ internal static class FrameRateTests
             await Verify("60", codec, reduce: false);
             await Verify("60", codec, external: true);
             await Verify("50", codec, external: true);
-            if (nvenc && codec != VideoCodec.VP9)
+            if (nvenc && (codec is VideoCodec.H264 or VideoCodec.H265))
                 await Verify("60", codec, hardware: HardwareAccelerationMode.NvidiaNvenc);
         }
         await Verify("30000/1001", VideoCodec.VP9, external: true);

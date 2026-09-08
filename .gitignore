@@ -98,3 +98,6 @@ secrets.json
 
 # Captured videos
 *.mkv
+
+# Unrelated document review material
+/patent-review/

@@ -47,28 +47,19 @@ PPTcrunch is a .NET 8 console application that compresses videos using quality-b
 
 ## Installation
 
-### Pre-built Executable (macOS)
+### Pre-built installer (macOS, Apple silicon)
 
-For macOS users, a pre-built, digitally signed executable is available for download:
+For macOS users, a signed and notarized installer is available:
 
-1. **Download** the executable from: https://ab6d.com/wp-content/uploads/2025/09/pptcrunch-macos-final.zip
-2. **Extract** the ZIP file to get the `pptcrunch` executable and README
-3. **Make executable** (if needed):
+1. **Download** `pptcrunch-macos.pkg` from: https://ab6d.com/wp-content/uploads/2025/09/pptcrunch-macos.pkg
+2. **Double-click** the downloaded file and follow Installer.app. Enter your Mac password when asked.
+3. Open **Terminal** and run:
    ```bash
-   chmod +x pptcrunch
+   pptcrunch --help
    ```
-4. **Add to PATH** (recommended): Move `pptcrunch` to a directory in your system PATH, such as:
-   ```bash
-   sudo mv pptcrunch /usr/local/bin/
-   ```
-   Or create a local bin directory:
-   ```bash
-   mkdir -p ~/bin
-   mv pptcrunch ~/bin/
-   echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
-5. **Run**: `pptcrunch <file-pattern>`
+   The installer places `pptcrunch` in `/usr/local/bin`, which is already on the default PATH.
+
+You do not need to run `chmod`, edit shell config, or move files. After install, `pptcrunch <file-pattern>` works from any folder.
 
 ### Building from Source
 
@@ -96,12 +87,14 @@ For macOS users, a pre-built, digitally signed executable is available for downl
 2. **Subsequent runs**: FFmpeg binaries are reused from that directory for faster startup.
 3. **Run**:
    - Windows: `PPTcrunch.exe <file-pattern>`
-   - macOS: `./PPTcrunch <file-pattern>`
+   - macOS (after the installer): `pptcrunch <file-pattern>`
+   - macOS (from a local build): `./pptcrunch <file-pattern>`
 
 ### Build Output Location
 
 - Windows builds output `publish\PPTcrunch.exe` in the repository root.
-- macOS builds output `publish/osx-arm64/PPTcrunch`.
+- macOS builds output `publish/osx-arm64/pptcrunch`.
+- The signed macOS installer (`./sign-macos-builds.sh`) is written to `publish/distribution/pptcrunch-macos.pkg`.
 
 ### Adding PPTcrunch to PATH (Windows)
 
@@ -137,13 +130,14 @@ This program is distributed as a **self-contained executable** with **automatic 
 - ✅ **Hardware optimization**: Uses NVENC constant-quality mode (`-rc vbr` with `-b:v 0`) on Windows and VideoToolbox quality targeting (`-q:v` with `-b:v 0`) on macOS
 - ✅ **Quality mapping**: CPU CRF, NVENC CQ, and VideoToolbox quality settings are aligned for comparable visual results per codec
 - ✅ **Cross-platform builds**: Scripts provided for Windows x64 and macOS (Apple silicon) self-contained executables
+- ✅ **macOS installer**: `sign-macos-builds.sh` produces a signed, notarized, stapled `.pkg` that installs `pptcrunch` to `/usr/local/bin`
 
 ## How to Use
 
 After building (`publish.bat` on Windows or `publish.sh` on macOS), run the executable from the publish directory:
 
 - Windows: `PPTcrunch.exe <file-pattern>`
-- macOS: `./PPTcrunch <file-pattern>`
+- macOS: `pptcrunch <file-pattern>` (installer) or `./pptcrunch <file-pattern>` (local build)
 
 Capture mode uses Windows-only DirectShow APIs and remains available as `PPTcrunch.exe capture` on Windows.
 

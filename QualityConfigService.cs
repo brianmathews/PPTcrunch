@@ -160,7 +160,7 @@ public class QualityConfigService
     }
 
     /// <summary>
-    /// Extracts the model number from NVIDIA GPU names (e.g., "GTX 1060" → 1060, "RTX 4080" → 4080)
+    /// Extracts the model number from NVIDIA GPU names (e.g., "GTX 1060" -> 1060, "RTX 4080" -> 4080)
     /// </summary>
     private static int? ExtractNvidiaModelNumber(string gpuName)
     {

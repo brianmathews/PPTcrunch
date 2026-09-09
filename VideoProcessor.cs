@@ -47,7 +47,7 @@ public class VideoProcessor
         string filename = Path.GetFileName(videoPath);
         if (ShouldSkipRecompression(filename, settings))
         {
-            Console.WriteLine($"⚠ Video appears to have already been recompressed (filename: {filename})");
+            Console.WriteLine($"[WARNING] Video appears to have already been recompressed (filename: {filename})");
             Console.WriteLine("  Skipping to avoid double compression.");
             return true; // Return true as this is not an error condition
         }
@@ -83,13 +83,13 @@ public class VideoProcessor
             if (result.WasCompressed && result.FileSizeReduced)
             {
                 Console.WriteLine();
-                Console.WriteLine($"✓ Video compressed successfully!");
+            Console.WriteLine($"[OK] Video compressed successfully!");
                 ShowCompressionResults(result);
                 return true;
             }
             else if (result.WasCompressed && (settings.StandaloneOnly || settings.QualityLevel == 4))
             {
-                Console.WriteLine("✓ Export saved. It is larger than the source at the selected quality.");
+                Console.WriteLine("[OK] Export saved. It is larger than the source at the selected quality.");
                 Console.WriteLine($"  Original: {FormatFileSize(result.OriginalSize)}; export: {FormatFileSize(result.FinalSize)}");
                 return true;
             }
@@ -101,7 +101,7 @@ public class VideoProcessor
                     File.Delete(outputPath);
                 }
                 Console.WriteLine();
-                Console.WriteLine($"⚠ Compressed file was larger than original - keeping original file unchanged");
+                Console.WriteLine($"[WARNING] Compressed file was larger than original - keeping original file unchanged");
                 Console.WriteLine($"  Original: {FormatFileSize(result.OriginalSize)}");
                 Console.WriteLine($"  Compressed: {FormatFileSize(result.FinalSize)}");
                 return true;
@@ -109,7 +109,7 @@ public class VideoProcessor
             else
             {
                 Console.WriteLine();
-                Console.WriteLine($"✗ Video compression failed - {result.Reason}");
+            Console.WriteLine($"[ERROR] Video compression failed - {result.Reason}");
                 return false;
             }
         }

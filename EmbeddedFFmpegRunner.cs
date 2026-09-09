@@ -63,7 +63,7 @@ public class EmbeddedFFmpegRunner
             _ffmpegPath = ffmpegDirectory;
 
             Console.WriteLine("FFmpeg binaries initialized successfully");
-            Console.WriteLine("✓ Embedded FFmpeg initialized successfully");
+            Console.WriteLine("[OK] Embedded FFmpeg initialized successfully");
             _initialized = true;
         }
         catch (Exception ex)
@@ -226,7 +226,7 @@ public class EmbeddedFFmpegRunner
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠ Error searching '{directory}': {ex.Message}");
+                    Console.WriteLine($"  [WARNING] Error searching '{directory}': {ex.Message}");
             return null;
         }
     }
@@ -372,7 +372,7 @@ public class EmbeddedFFmpegRunner
                 ? await Vp9TwoPassEncoder.RunAsync(inputPath, outputPath, settings, args, RunPass)
                 : await RunPass(label, args, outputPath);
             if (!success) return false;
-            Console.WriteLine($"\n✓ {label} compression completed successfully");
+            Console.WriteLine($"\n[OK] {label} compression completed successfully");
             return true;
         }
         catch (Exception ex)

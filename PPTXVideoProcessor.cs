@@ -57,7 +57,7 @@ public class PPTXVideoProcessor
             FileManager.CreateFinalPPTXFile(workingDir, outputPath);
 
             Console.WriteLine();
-            Console.WriteLine($"✓ Compressed PPTX saved as: {outputPath}");
+        Console.WriteLine($"[OK] Compressed PPTX saved as: {outputPath}");
 
             // Show file size comparison
             ShowFileSizeComparison(pptxPath, outputPath, compressionResults);
@@ -82,7 +82,7 @@ public class PPTXVideoProcessor
             if (VideoProcessor.ShouldSkipRecompression(video.OriginalFileName, settings))
             {
                 Console.WriteLine($"[{i + 1}/{videoFiles.Count}] Skipping: {video.OriginalFileName}");
-                Console.WriteLine($"⚠ Video appears to have already been recompressed");
+            Console.WriteLine($"[WARNING] Video appears to have already been recompressed");
                 Console.WriteLine("  Skipping to avoid double compression.");
                 Console.WriteLine();
 
@@ -141,7 +141,7 @@ public class PPTXVideoProcessor
                         result.CompressionMethod = encodingResult.Method;
                         result.Reason = isSmaller ? "Compressed file is smaller" : "Requested archive output retained";
 
-                        Console.WriteLine($"✓ Compression successful - using compressed version");
+                Console.WriteLine($"[OK] Compression successful - using compressed version");
                         ShowCompressionResults(video.TempOrigPath, outputPath);
                     }
                     else
@@ -158,7 +158,7 @@ public class PPTXVideoProcessor
                         string originalFinalPath = Path.Combine(tempDir, video.OriginalFileName);
                         File.Copy(video.TempOrigPath, originalFinalPath, true);
 
-                        Console.WriteLine($"⚠ Compressed file ({FormatFileSize(compressedSize)}) is not smaller than original ({FormatFileSize(result.OriginalSize)})");
+                Console.WriteLine($"[WARNING] Compressed file ({FormatFileSize(compressedSize)}) is not smaller than original ({FormatFileSize(result.OriginalSize)})");
                         Console.WriteLine("  Using original file instead.");
 
                         // Clean up the compressed file since we're not using it
@@ -178,7 +178,7 @@ public class PPTXVideoProcessor
                     result.CompressionMethod = "Original";
                     result.Reason = "Compression failed";
 
-                    Console.WriteLine($"✗ Failed to compress: {video.OriginalFileName}");
+            Console.WriteLine($"[ERROR] Failed to compress: {video.OriginalFileName}");
                     Console.WriteLine("  Using original file instead.");
 
                     // Keep original file
@@ -196,7 +196,7 @@ public class PPTXVideoProcessor
                 result.CompressionMethod = "Original";
                 result.Reason = $"Error during compression: {ex.Message}";
 
-                Console.WriteLine($"✗ Error compressing {video.OriginalFileName}: {ex.Message}");
+            Console.WriteLine($"[ERROR] Error compressing {video.OriginalFileName}: {ex.Message}");
                 Console.WriteLine("  Using original file instead.");
 
                 // Keep original file
@@ -264,13 +264,13 @@ public class PPTXVideoProcessor
                 {
                     compressedCount++;
                     totalVideoSaved += (result.OriginalSize - result.FinalSize);
-                    Console.WriteLine($"  ✓ {result.OriginalFileName}: {FormatFileSize(result.OriginalSize)} -> {FormatFileSize(result.FinalSize)} " +
+                Console.WriteLine($"  [OK] {result.OriginalFileName}: {FormatFileSize(result.OriginalSize)} -> {FormatFileSize(result.FinalSize)} " +
                                     $"({((double)(result.OriginalSize - result.FinalSize) / result.OriginalSize * 100):F1}% saved, {result.CompressionMethod})");
                 }
                 else
                 {
                     originalKeptCount++;
-                    Console.WriteLine($"  ⚠ {result.OriginalFileName}: {FormatFileSize(result.OriginalSize)} (kept original - {result.Reason})");
+                Console.WriteLine($"  [WARNING] {result.OriginalFileName}: {FormatFileSize(result.OriginalSize)} (kept original - {result.Reason})");
                 }
             }
 

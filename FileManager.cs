@@ -138,7 +138,7 @@ public static class FileManager
 
                 Directory.Delete(tempDir, true);
                 tempDirCleaned = true;
-                Console.WriteLine($"  ✓ Deleted temp directory: {Path.GetFileName(tempDir)}");
+                Console.WriteLine($"  [OK] Deleted temp directory: {Path.GetFileName(tempDir)}");
             }
             else
             {
@@ -147,7 +147,7 @@ public static class FileManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠ Could not delete temp directory '{Path.GetFileName(tempDir)}': {ex.Message}");
+                Console.WriteLine($"  [WARNING] Could not delete temp directory '{Path.GetFileName(tempDir)}': {ex.Message}");
             Console.WriteLine($"    You may need to manually delete: {tempDir}");
         }
 
@@ -162,7 +162,7 @@ public static class FileManager
 
                 Directory.Delete(workingDir, true);
                 workingDirCleaned = true;
-                Console.WriteLine($"  ✓ Deleted working directory: {Path.GetFileName(workingDir)}");
+                Console.WriteLine($"  [OK] Deleted working directory: {Path.GetFileName(workingDir)}");
             }
             else
             {
@@ -171,7 +171,7 @@ public static class FileManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠ Could not delete working directory '{Path.GetFileName(workingDir)}': {ex.Message}");
+                Console.WriteLine($"  [WARNING] Could not delete working directory '{Path.GetFileName(workingDir)}': {ex.Message}");
             Console.WriteLine($"    You may need to manually delete: {workingDir}");
         }
 
@@ -182,7 +182,7 @@ public static class FileManager
             {
                 File.Delete(zipPath);
                 zipFileCleaned = true;
-                Console.WriteLine($"  ✓ Deleted ZIP file: {Path.GetFileName(zipPath)}");
+                Console.WriteLine($"  [OK] Deleted ZIP file: {Path.GetFileName(zipPath)}");
             }
             else
             {
@@ -191,18 +191,18 @@ public static class FileManager
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠ Could not delete ZIP file '{Path.GetFileName(zipPath)}': {ex.Message}");
+                Console.WriteLine($"  [WARNING] Could not delete ZIP file '{Path.GetFileName(zipPath)}': {ex.Message}");
             Console.WriteLine($"    You may need to manually delete: {zipPath}");
         }
 
         // Summary
         if (tempDirCleaned && workingDirCleaned && zipFileCleaned)
         {
-            Console.WriteLine("  ✓ All temporary files cleaned up successfully");
+            Console.WriteLine("  [OK] All temporary files cleaned up successfully");
         }
         else
         {
-            Console.WriteLine("  ⚠ Some temporary files could not be cleaned up automatically");
+            Console.WriteLine("  [WARNING] Some temporary files could not be cleaned up automatically");
             Console.WriteLine($"    Note: FFmpeg binaries are kept at {EmbeddedFFmpegRunner.GetPreferredFFmpegDirectory()} for performance (reuse on next run)");
         }
     }

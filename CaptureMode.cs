@@ -17,7 +17,7 @@ public static class CaptureMode
 
         string path = Path.Combine(AppContext.BaseDirectory, "capture-diagnostics.txt");
         var report = new StringBuilder();
-        report.AppendLine($"PPTcrunch capture diagnostics — {DateTimeOffset.Now:O}");
+        report.AppendLine($"PPTcrunch capture diagnostics - {DateTimeOffset.Now:O}");
         report.AppendLine($"Device requested: {deviceName}");
         try
         {
@@ -117,7 +117,7 @@ public static class CaptureMode
 
     private static async Task<int> CaptureAsync(bool mac)
     {
-        Console.WriteLine("\nUSB Video Capture — video only\n");
+        Console.WriteLine("\nUSB Video Capture - video only\n");
         if (!mac && !OperatingSystem.IsWindowsVersionAtLeast(6, 1))
             throw new PlatformNotSupportedException("Windows capture requires Windows 7 or later.");
         if (mac) Console.WriteLine("Allow camera access for your terminal when macOS prompts. No microphone access is needed.");
@@ -175,14 +175,14 @@ public static class CaptureMode
         // available only at another resolution (e.g. 1080p120 versus 4K30).
         var sizes = formats.Select(f => (f.Width, f.Height)).Distinct().OrderBy(s => s.Height).ThenBy(s => s.Width).ToList();
         int defaultSize = Math.Max(0, sizes.FindIndex(s => s.Width == 1920 && s.Height == 1080));
-        var size = sizes[Choose("Resolution", sizes.Select(s => $"{s.Width} × {s.Height}").ToList(), defaultSize)];
+        var size = sizes[Choose("Resolution", sizes.Select(s => $"{s.Width} x {s.Height}").ToList(), defaultSize)];
         var atSize = formats.Where(f => f.Width == size.Width && f.Height == size.Height).ToList();
         var supportedRates = CaptureSupport.Rates(atSize, mac);
-        Console.WriteLine($"\nThe capture device reports these allowed FPS rates at {size.Width} × {size.Height}:");
+        Console.WriteLine($"\nThe capture device reports these allowed FPS rates at {size.Width} x {size.Height}:");
         foreach (double supportedRate in supportedRates)
-            Console.WriteLine($"  • {CaptureGuidance.RateLabel(supportedRate)}");
+            Console.WriteLine($"  - {CaptureGuidance.RateLabel(supportedRate)}");
         Console.WriteLine("Tiny device timing differences are shown as nominal FPS; the exact advertised rate is still requested.");
-        double rate = supportedRates[Choose($"Allowed capture frame rate at {size.Width} × {size.Height}",
+        double rate = supportedRates[Choose($"Allowed capture frame rate at {size.Width} x {size.Height}",
             supportedRates.Select(CaptureGuidance.RateLabel).ToList(), CaptureGuidance.DefaultRate(supportedRates))];
         var available = atSize.Where(f => CaptureSupport.SupportsRate(f, rate, mac)).ToList();
         List<(string Kind, string Format)> colors;
@@ -251,7 +251,7 @@ public static class CaptureMode
             var modes = new List<CaptureRecording> { CaptureRecording.Direct };
             var labels = new List<string>
             {
-                "Pass-through — NO additional transcoding\n" +
+                "Pass-through - NO additional transcoding\n" +
                 (stream.Codec == "rawvideo"
                     ? $"      Save the received {stream.PixelFormat} pixels uncompressed.\n      Lowest encoding work; very large files and high disk throughput."
                     : $"      Save the received {stream.Codec} stream with its existing compression.\n      No re-encoding and no additional compression quality loss.")
@@ -259,16 +259,16 @@ public static class CaptureMode
             if (CaptureSupport.LosslessPixel(stream.PixelFormat) != null)
             {
                 modes.Add(CaptureRecording.LosslessCpu);
-                labels.Add("Lossless transcoding — FFV1 using the CPU\n" +
+                labels.Add("Lossless transcoding - FFV1 using the CPU\n" +
                     "      Compress without losing any received picture detail.\n" +
                     "      Uses CPU processing; file size and speed depend on the video.");
             }
             modes.Add(CaptureRecording.LossyHardware);
-            labels.Add("Lossy transcoding — H.264/H.265 using " + (mac ? "Apple hardware" : "NVIDIA hardware") + "\n" +
+                labels.Add("Lossy transcoding - H.264/H.265 using " + (mac ? "Apple hardware" : "NVIDIA hardware") + "\n" +
                 "      Smaller files by discarding some picture detail.\n" +
                 "      You choose the target quality; the hardware handles encoding.");
             modes.Add(CaptureRecording.LossyCpu);
-            labels.Add("Lossy transcoding — H.264/H.265 using the CPU\n" +
+            labels.Add("Lossy transcoding - H.264/H.265 using the CPU\n" +
                 "      Smaller files by discarding some picture detail.\n" +
                 "      You choose the target quality; uses more CPU processing.");
             Console.WriteLine("\nNow choose how to save the received video.");
@@ -277,14 +277,14 @@ public static class CaptureMode
             Console.WriteLine("Choose lossless to preserve all received picture detail, or lossy for smaller files.");
             Console.WriteLine("Pass-through and lossless modes cannot restore detail already lost in the card or driver.");
             if (mac) Console.WriteLine("Pass-through preserves what macOS delivers, which may differ from the card's original compressed stream.");
-            var recording = modes[Choose("Recording mode — how the file is stored", labels)];
+            var recording = modes[Choose("Recording mode - how the file is stored", labels)];
             var hardware = mac ? HardwareAccelerationMode.AppleVideoToolbox : HardwareAccelerationMode.NvidiaNvenc;
             var codec = VideoCodec.H264;
             int quality = 2;
             if (recording is CaptureRecording.LossyCpu or CaptureRecording.LossyHardware)
             {
                 codec = Choose("Output codec", new[] { "H.264 (widest compatibility)", "H.265 (more compression)" }) == 0 ? VideoCodec.H264 : VideoCodec.H265;
-                quality = Choose("Target quality (lossy, 8-bit YUV 4:2:0)", new[] { "0 — Passable", "1 — Good", "2 — Better", "3 — High quality", "4 — Archive quality (still lossy)" }, 2);
+                quality = Choose("Target quality (lossy, 8-bit YUV 4:2:0)", new[] { "0 - Passable", "1 - Good", "2 - Better", "3 - High quality", "4 - Archive quality (still lossy)" }, 2);
                 if (size.Width % 2 != 0 || size.Height % 2 != 0)
                     throw new IOException("H.264/H.265 capture requires even dimensions. Choose an even capture resolution or direct/lossless recording.");
             }

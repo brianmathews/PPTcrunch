@@ -165,11 +165,11 @@ public class FFmpegRunner
             bool success = process.ExitCode == 0;
             if (success)
             {
-                Console.WriteLine("✓ Video compression completed successfully");
+            Console.WriteLine("[OK] Video compression completed successfully");
             }
             else
             {
-                Console.WriteLine($"✗ FFmpeg failed with exit code: {process.ExitCode}");
+            Console.WriteLine($"[ERROR] FFmpeg failed with exit code: {process.ExitCode}");
             }
 
             return success;
@@ -270,7 +270,7 @@ public class FFmpegRunner
             using var process = Process.Start(startInfo);
             if (process == null)
             {
-                Console.WriteLine("  ✗ Failed to start FFmpeg to check encoders");
+                Console.WriteLine("  [ERROR] Failed to start FFmpeg to check encoders");
                 return false;
             }
 
@@ -281,21 +281,21 @@ public class FFmpegRunner
 
             if (hasNVENC)
             {
-                Console.WriteLine("  ✓ NVIDIA NVENC encoder found in FFmpeg");
+                Console.WriteLine("  [OK] NVIDIA NVENC encoder found in FFmpeg");
 
                 // Test if CUDA/NVENC actually works with a quick test
                 return await TestNVENCFunctionality();
             }
             else
             {
-                Console.WriteLine("  ✗ NVIDIA NVENC encoder not found in FFmpeg build");
+                Console.WriteLine("  [ERROR] NVIDIA NVENC encoder not found in FFmpeg build");
                 Console.WriteLine("    Your FFmpeg may not be compiled with NVENC support");
                 return false;
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ✗ Error checking NVENC availability: {ex.Message}");
+            Console.WriteLine($"  [ERROR] Error checking NVENC availability: {ex.Message}");
             return false;
         }
     }
@@ -324,12 +324,12 @@ public class FFmpegRunner
 
             if (process.ExitCode == 0)
             {
-                Console.WriteLine("  ✓ NVENC test successful - GPU acceleration available");
+                Console.WriteLine("  [OK] NVENC test successful - GPU acceleration available");
                 return true;
             }
             else
             {
-                Console.WriteLine("  ✗ NVENC test failed:");
+                Console.WriteLine("  [ERROR] NVENC test failed:");
                 Console.WriteLine($"    {error.Split('\n').LastOrDefault(l => !string.IsNullOrWhiteSpace(l))}");
                 Console.WriteLine("    GPU may not support NVENC or drivers may be outdated");
                 return false;
@@ -337,7 +337,7 @@ public class FFmpegRunner
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ✗ Error testing NVENC: {ex.Message}");
+            Console.WriteLine($"  [ERROR] Error testing NVENC: {ex.Message}");
             return false;
         }
     }

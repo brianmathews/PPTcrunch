@@ -117,12 +117,12 @@ class Program
                     try
                     {
                         await pptxProcessor.ProcessAsync(pptxFile, settings);
-                        Console.WriteLine($"✓ Successfully processed: {Path.GetFileName(pptxFile)}");
+                Console.WriteLine($"[OK] Successfully processed: {Path.GetFileName(pptxFile)}");
                         successCount++;
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"✗ Failed to process {Path.GetFileName(pptxFile)}: {ex.Message}");
+                Console.WriteLine($"[ERROR] Failed to process {Path.GetFileName(pptxFile)}: {ex.Message}");
                     }
                     Console.WriteLine();
                 }
@@ -143,17 +143,17 @@ class Program
                         bool success = await videoProcessor.ProcessVideoFileAsync(videoFile, settings);
                         if (success)
                         {
-                            Console.WriteLine($"✓ Successfully processed: {Path.GetFileName(videoFile)}");
+                Console.WriteLine($"[OK] Successfully processed: {Path.GetFileName(videoFile)}");
                             successCount++;
                         }
                         else
                         {
-                            Console.WriteLine($"✗ Failed to process: {Path.GetFileName(videoFile)}");
+                Console.WriteLine($"[ERROR] Failed to process: {Path.GetFileName(videoFile)}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"✗ Failed to process {Path.GetFileName(videoFile)}: {ex.Message}");
+            Console.WriteLine($"[ERROR] Failed to process {Path.GetFileName(videoFile)}: {ex.Message}");
                     }
                     Console.WriteLine();
                 }
@@ -191,11 +191,11 @@ class Program
         bool ffmpegAvailable = await EmbeddedFFmpegRunner.CheckFFmpegAvailabilityAsync();
         if (ffmpegAvailable)
         {
-            Console.WriteLine("  ✓ Embedded FFmpeg is available");
+                Console.WriteLine("  [OK] Embedded FFmpeg is available");
         }
         else
         {
-            Console.WriteLine("  ✗ Failed to initialize embedded FFmpeg");
+                Console.WriteLine("  [ERROR] Failed to initialize embedded FFmpeg");
             Console.WriteLine("    This should not happen with the embedded version.");
             result.CanProceed = false;
         }
@@ -212,34 +212,34 @@ class Program
         switch (result.GPUInfo.HardwareAcceleration)
         {
             case HardwareAccelerationMode.NvidiaNvenc:
-                Console.WriteLine($"  ✓ NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
+            Console.WriteLine($"  [OK] NVIDIA GPU detected: {result.GPUInfo.GPUModel}");
                 if (!string.IsNullOrEmpty(result.GPUInfo.DriverVersion))
                 {
                     Console.WriteLine($"    Driver version: {result.GPUInfo.DriverVersion}");
                 }
                 Console.WriteLine($"    Generation: {result.GPUInfo.CompatibilityProfile}");
-                Console.WriteLine("    ✓ NVENC hardware acceleration available");
+                Console.WriteLine("    [OK] NVENC hardware acceleration available");
                 if (result.GPUInfo.SupportsH264)
-                    Console.WriteLine("      ✓ H.264 encoding supported");
+                    Console.WriteLine("      [OK] H.264 encoding supported");
                 if (result.GPUInfo.SupportsH265)
-                    Console.WriteLine("      ✓ H.265 encoding supported");
+                    Console.WriteLine("      [OK] H.265 encoding supported");
                 Console.WriteLine(result.GPUInfo.SupportsAV1 ? "      AV1 encoding verified" : "      AV1 encoding uses CPU on this GPU");
                 break;
             case HardwareAccelerationMode.AppleVideoToolbox:
-                Console.WriteLine("  ✓ Apple VideoToolbox hardware acceleration detected");
+            Console.WriteLine("  [OK] Apple VideoToolbox hardware acceleration detected");
                 Console.WriteLine($"    Platform: {(result.GPUInfo.IsAppleSilicon ? "Apple silicon (arm64)" : "Intel macOS")}");
                 Console.WriteLine($"    VideoToolbox profile: {result.GPUInfo.CompatibilityProfile}");
                 if (result.GPUInfo.SupportsH264)
-                    Console.WriteLine("      ✓ H.264 encoding supported");
+                Console.WriteLine("      [OK] H.264 encoding supported");
                 if (result.GPUInfo.SupportsH265)
-                    Console.WriteLine("      ✓ H.265 encoding supported");
+                Console.WriteLine("      [OK] H.265 encoding supported");
                 else
-                    Console.WriteLine("      ⚠ H.265 encoding not reported by this FFmpeg build");
+                Console.WriteLine("      [WARNING] H.265 encoding not reported by this FFmpeg build");
                 break;
             default:
                 if (result.GPUInfo.HasNvidiaGPU)
                 {
-                    Console.WriteLine($"  ⚠ NVIDIA GPU detected ({result.GPUInfo.GPUModel}) but NVENC is unavailable");
+                Console.WriteLine($"  [WARNING] NVIDIA GPU detected ({result.GPUInfo.GPUModel}) but NVENC is unavailable");
                     Console.WriteLine("    This could be due to:");
                     Console.WriteLine("    - GPU doesn't support NVENC (requires GTX 600+ or RTX series)");
                     Console.WriteLine("    - Outdated GPU drivers");
@@ -247,12 +247,12 @@ class Program
                 }
                 else if (OperatingSystem.IsMacOS())
                 {
-                    Console.WriteLine("  ⚠ Apple VideoToolbox hardware acceleration not available");
+                Console.WriteLine("  [WARNING] Apple VideoToolbox hardware acceleration not available");
                     Console.WriteLine("    Ensure you're using the bundled FFmpeg build and macOS allows VideoToolbox access");
                 }
                 else
                 {
-                    Console.WriteLine("  ⚠ No supported hardware encoder detected");
+                Console.WriteLine("  [WARNING] No supported hardware encoder detected");
                     Console.WriteLine("    GPU acceleration requires NVIDIA NVENC or Apple VideoToolbox");
                 }
                 break;
@@ -260,7 +260,7 @@ class Program
 
         if (!result.GPUInfo.SupportsHardwareAcceleration)
         {
-            Console.WriteLine("  ⚠ Hardware acceleration not available - will use CPU encoding");
+            Console.WriteLine("  [WARNING] Hardware acceleration not available - will use CPU encoding");
         }
 
         result.CanProceed = true;
@@ -370,7 +370,7 @@ class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("Halve even integer frame rates of 48 FPS or higher (48→24, 50→25, 60→30, 120→60).");
+        Console.WriteLine("Halve even integer frame rates of 48 FPS or higher (48->24, 50->25, 60->30, 120->60).");
         Console.WriteLine("Lower, odd and fractional rates are preserved.");
         Console.Write("Enable frame-rate reduction? (y/N, default: N): ");
         string? fpsInput = Console.ReadLine()?.Trim().ToLowerInvariant();
@@ -441,7 +441,7 @@ class Program
         Console.WriteLine("Output:");
         Console.WriteLine("  - PPTX files: Creates new file with '-shrunk' suffix");
         Console.WriteLine("  - Video files: Creates new file with quality and codec suffix");
-        Console.WriteLine("    Examples: video.mov → video-L2H264.mp4 or video-L2VP9.webm or video-L2AV1.mp4");
+        Console.WriteLine("    Examples: video.mov -> video-L2H264.mp4 or video-L2VP9.webm or video-L2AV1.mp4");
     }
 
     private static List<string> ExpandFilePattern(string pattern)

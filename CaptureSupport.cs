@@ -16,39 +16,39 @@ internal static class CaptureSupport
 
     internal static string DescribeFormat(string kind, string format) => format.ToLowerInvariant() switch
     {
-        "uyvy422" => "UYVY — uncompressed video, 4:2:2 color (uyvy422)\n" +
+        "uyvy422" => "UYVY - uncompressed video, 4:2:2 color (uyvy422)\n" +
             "      More color detail than NV12, useful for colored text and graphics.\n" +
             "      Same picture detail and data size as YUYV.",
-        "yuyv422" => "YUYV — uncompressed video, 4:2:2 color (yuyv422)\n" +
+        "yuyv422" => "YUYV - uncompressed video, 4:2:2 color (yuyv422)\n" +
             "      Same picture detail and data size as UYVY; only the byte order differs.\n" +
             "      More color detail than NV12.",
-        "nv12" or "nv21" => $"{format.ToUpperInvariant()} — uncompressed video, 4:2:0 color\n" +
+        "nv12" or "nv21" => $"{format.ToUpperInvariant()} - uncompressed video, 4:2:0 color\n" +
             "      Same brightness detail, but less color detail than UYVY/YUYV.\n" +
             "      About 25% less data at the same resolution and frame rate.",
-        "p010le" => "P010 — uncompressed 10-bit video, 4:2:0 color\n" +
+        "p010le" => "P010 - uncompressed 10-bit video, 4:2:0 color\n" +
             "      More tonal precision than 8-bit NV12, but the same chroma resolution.\n" +
             "      Uses twice as much device bandwidth as NV12.",
-        "mjpeg" => "MJPEG — video already compressed as individual JPEG frames\n" +
+        "mjpeg" => "MJPEG - video already compressed as individual JPEG frames\n" +
             "      Image quality depends on the card's JPEG compression settings.\n" +
             "      Usually sends less data than uncompressed video.",
-        "h264" => "H.264 — video already compressed before PPTcrunch receives it\n" +
+        "h264" => "H.264 - video already compressed before PPTcrunch receives it\n" +
             "      Color detail and compression quality depend on the card's settings.",
-        "hevc" => "H.265 / HEVC — video already compressed before PPTcrunch receives it\n" +
+        "hevc" => "H.265 / HEVC - video already compressed before PPTcrunch receives it\n" +
             "      Color detail and compression quality depend on the card's settings.",
-        "rgb24" => "RGB24 — uncompressed red, green and blue values\n" +
+        "rgb24" => "RGB24 - uncompressed red, green and blue values\n" +
             "      Full color values for every pixel; a large data stream.\n" +
             "      Can retain more color detail than 4:2:2/4:2:0 if present in the source.",
-        "bgr24" => "RGB24 — uncompressed red, green and blue values (BGR24 memory layout)\n" +
+        "bgr24" => "RGB24 - uncompressed red, green and blue values (BGR24 memory layout)\n" +
             "      Full color values for every pixel; a large data stream.\n" +
             "      Windows stores the channel bytes as BGR; no color conversion is performed.",
-        "0rgb" or "rgb0" or "0bgr" or "bgr0" => $"{format.ToUpperInvariant()} — uncompressed RGB, 8 bits per color plus one padding byte\n" +
+        "0rgb" or "rgb0" or "0bgr" or "bgr0" => $"{format.ToUpperInvariant()} - uncompressed RGB, 8 bits per color plus one padding byte\n" +
             "      Same color precision as RGB24; uses 4 bytes per pixel instead of 3.\n" +
             "      macOS/driver may convert YUV to RGB; this cannot restore missing color detail.",
-        "bgra" or "rgba" or "argb" or "abgr" => $"{format.ToUpperInvariant()} — uncompressed color plus transparency (alpha)\n" +
+        "bgra" or "rgba" or "argb" or "abgr" => $"{format.ToUpperInvariant()} - uncompressed color plus transparency (alpha)\n" +
             "      Full color values for every pixel; a large data stream.",
         _ => kind == "vcodec"
-            ? $"{format} — encoded video delivered by the card/driver\n      Picture quality depends on the card's format and compression settings."
-            : $"{format} — uncompressed pixel format delivered by the card/driver\n      Color detail and bit depth depend on this device format."
+            ? $"{format} - encoded video delivered by the card/driver\n      Picture quality depends on the card's format and compression settings."
+            : $"{format} - uncompressed pixel format delivered by the card/driver\n      Color detail and bit depth depend on this device format."
     };
 
     internal static List<CaptureDevice> ParseDevices(string text, bool mac)

@@ -35,6 +35,9 @@ internal static class CaptureSupport
         "rgb24" or "bgr24" => $"{format.ToUpperInvariant()} — uncompressed red, green and blue values\n" +
             "      Full color values for every pixel; a large data stream.\n" +
             "      Can retain more color detail than 4:2:2/4:2:0 if present in the source.",
+        "0rgb" or "rgb0" or "0bgr" or "bgr0" => $"{format.ToUpperInvariant()} — uncompressed RGB, 8 bits per color plus one padding byte\n" +
+            "      Same color precision as RGB24; uses 4 bytes per pixel instead of 3.\n" +
+            "      macOS/driver may convert YUV to RGB; this cannot restore missing color detail.",
         "bgra" or "rgba" or "argb" or "abgr" => $"{format.ToUpperInvariant()} — uncompressed color plus transparency (alpha)\n" +
             "      Full color values for every pixel; a large data stream.",
         _ => kind == "vcodec"
@@ -56,7 +59,9 @@ internal static class CaptureSupport
             string name = match.Groups[mac ? 2 : 1].Value.Trim();
             // AVFoundation also lists displays. This feature records physical video inputs only.
             if (mac && name.StartsWith("Capture screen ", StringComparison.OrdinalIgnoreCase)) continue;
-            var uid = mac ? Regex.Match(name, @"\s+\[uid:(.+)\]\s*$") : Match.Empty;
+            // USB devices may append [serial:...] after [uid:...]. Keep each
+            // bracketed field separate so the serial cannot become part of the ID.
+            var uid = mac ? Regex.Match(name, @"\s+\[uid:([^\[\]\r\n]+)\](?:\s+\[serial:[^\[\]\r\n]*\])?\s*$") : Match.Empty;
             result.Add(uid.Success
                 ? new(uid.Groups[1].Value, name[..uid.Index].Trim(), true)
                 : new(mac ? match.Groups[1].Value : name, name));
@@ -104,7 +109,9 @@ internal static class CaptureSupport
         {
             if (line.Contains("Supported pixel formats:")) { inList = true; continue; }
             if (!inList) continue;
-            var m = Regex.Match(line, @"\]\s+([a-z][a-z0-9]+)\s*$");
+            // Formats such as 0rgb/0bgr start with a digit. Do not truncate the
+            // list at those entries and lose every following format as well.
+            var m = Regex.Match(line, @"\]\s+([a-z0-9][a-z0-9_]+)\s*$");
             if (!m.Success) { inList = false; continue; }
             result.Add(m.Groups[1].Value);
         }

@@ -22,6 +22,15 @@ internal static class CaptureTests
         var stable = CaptureSupport.ParseDevices("[AVFoundation indev @ 1] AVFoundation video devices:\n[AVFoundation indev @ 1] [4] USB Video  [uid:0x1100000534d2109]", true).Single();
         Check(stable.IsUniqueId && stable.Name == "USB Video" && stable.Id == "0x1100000534d2109", "stable device ID parsed separately from display name");
         Check(CaptureSupport.DeviceInput(stable, true).SequenceEqual(new[] { "-video_device_id", "uid:0x1100000534d2109", "-i", "default:none" }), "stable ID used across separate FFmpeg invocations");
+        var serialDevice = CaptureSupport.ParseDevices("""
+            [AVFoundation indev @ 1] AVFoundation video devices:
+            [AVFoundation indev @ 1] [0] MacBook Pro Camera [uid:built-in]
+            [AVFoundation indev @ 1] [1] Live Gamer Ultra 2.1-Video [uid:0x120000007ca2553] [serial:5314420800751]
+            """, true)[1];
+        Check(serialDevice.IsUniqueId && serialDevice.Name == "Live Gamer Ultra 2.1-Video" && serialDevice.Id == "0x120000007ca2553",
+            "USB serial metadata is excluded from the unique ID and display name");
+        Check(CaptureSupport.DeviceInput(serialDevice, true).SequenceEqual(new[] { "-video_device_id", "uid:0x120000007ca2553", "-i", "default:none" }),
+            "device lookup receives only the UID even when a serial number was advertised");
         var windows = CaptureSupport.ParseDevices("""
             [dshow @ 1] "USB Video" (video)
             [dshow @ 1]   Alternative name "@device_pnp_123"
@@ -45,9 +54,13 @@ internal static class CaptureTests
             [avfoundation @ 1] Supported pixel formats:
             [avfoundation @ 1]   uyvy422
             [avfoundation @ 1]   nv12
+            [avfoundation @ 1]   0rgb
+            [avfoundation @ 1]   bgr0
             [avfoundation @ 1] Overriding selected pixel format to use uyvy422 instead.
             """);
-        Check(pixels.SequenceEqual(new[] { "uyvy422", "nv12" }), "pixel list excludes diagnostics");
+        Check(pixels.SequenceEqual(new[] { "uyvy422", "nv12", "0rgb", "bgr0" }), "pixel list retains digit-leading formats and later entries, and excludes diagnostics");
+        Check(CaptureSupport.DescribeFormat("pixel_format", "0rgb").Contains("padding byte") &&
+              CaptureSupport.DescribeFormat("pixel_format", "bgr0").Contains("cannot restore"), "padded RGB descriptions explain storage and conversion limitations");
         Check(CaptureMode.HasModeFallback("Overriding selected pixel format to use nv12 instead."), "fallback rejected");
         Check(Math.Abs(CaptureMode.SampleRate("""{"packets":[{"pts_time":"1.0"},{"pts_time":"1.2"},{"pts_time":"1.4"}]}""") - 5) < .001, "actual sample cadence detects 5fps fallback");
         var mode = new CaptureSelection(new("USB \"HDMI\"", "test"), 1920, 1080, 29.97, "pixel_format", "yuyv422");

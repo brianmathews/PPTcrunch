@@ -11,12 +11,27 @@ printf '========================================\n\n'
 printf 'Building self-contained single file executable with automatic FFmpeg download...\n'
 printf 'Target: macOS (Apple silicon, arm64) - no .NET runtime or FFmpeg installation required\n\n'
 
-dotnet msbuild "$SCRIPT_DIR/increment-build.proj" -t:IncrementBuildNumber -nologo
+if ! command -v git >/dev/null 2>&1; then
+    printf 'ERROR: Git is required to derive the build number from the current commit.\n' >&2
+    exit 1
+fi
+
+if [[ "$(git -C "$SCRIPT_DIR" rev-parse --is-shallow-repository)" == "true" ]]; then
+    printf 'ERROR: A full Git clone is required because shallow clones do not have a stable total commit count.\n' >&2
+    exit 1
+fi
+
+BUILD_NUMBER="$(git -C "$SCRIPT_DIR" rev-list --count HEAD)"
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    printf 'ERROR: Could not derive a numeric build number from Git.\n' >&2
+    exit 1
+fi
+printf 'Build number: %s (Git commit count)\n\n' "$BUILD_NUMBER"
 
 rm -rf "$PUBLISH_DIR"
 mkdir -p "$PUBLISH_DIR"
 
-dotnet clean "$SCRIPT_DIR/PPTcrunch.csproj" --configuration Release > /dev/null
+dotnet clean "$SCRIPT_DIR/PPTcrunch.csproj" --configuration Release -p:BuildNumber="$BUILD_NUMBER" > /dev/null
 
 dotnet publish "$SCRIPT_DIR/PPTcrunch.csproj" \
     --configuration Release \
@@ -27,6 +42,7 @@ dotnet publish "$SCRIPT_DIR/PPTcrunch.csproj" \
     -p:EnableCompressionInSingleFile=false \
     -p:TrimMode=partial \
     -p:PublishReadyToRun=true \
+    -p:BuildNumber="$BUILD_NUMBER" \
     -o "$PUBLISH_DIR"
 
 printf '\nChecking build results...\n\n'

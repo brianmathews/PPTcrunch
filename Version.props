@@ -1,12 +1,19 @@
 <Project>
   <PropertyGroup>
-    <!-- Edit the release version here; publishing increments build-number.txt. -->
+    <!-- Edit the release version here. Publish scripts supply the Git commit count. -->
     <VersionPrefix>1.0.0</VersionPrefix>
-    <BuildNumber>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)build-number.txt').Trim())</BuildNumber>
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
     <Version>$(VersionPrefix).$(BuildNumber)</Version>
     <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <Target Name="ValidateBuildNumber" BeforeTargets="GenerateAssemblyInfo">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(BuildNumber)', '^\d+$'))"
+           Text="BuildNumber must be a nonnegative integer. The publish scripts derive it from the Git commit count." />
+    <Error Condition="$(BuildNumber) &gt;= 65535"
+           Text="Git commit count exceeds the four-part file-version limit. Increase VersionPrefix and revise the versioning scheme." />
+  </Target>
 </Project>

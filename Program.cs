@@ -6,6 +6,21 @@ class Program
 {
     static async Task<int> Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--version")
+        {
+            var version = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+            Console.WriteLine($"pptcrunch {version}");
+            return 0;
+        }
+
+        if (args.Length == 1 && (args[0] == "--help" || args[0] == "-h"))
+        {
+            ShowUsage();
+            return 0;
+        }
+
         if (args.Length == 1 && string.Equals(args[0], "capture", StringComparison.OrdinalIgnoreCase))
         {
             return await CaptureMode.RunAsync();
@@ -402,6 +417,7 @@ class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  PPTcrunch <file-pattern>");
         Console.WriteLine("  PPTcrunch capture");
+        Console.WriteLine("  PPTcrunch --version                 # Print release version and build number");
         Console.WriteLine();
         Console.WriteLine("Supported file types:");
         Console.WriteLine("  - PowerPoint presentations: *.pptx");

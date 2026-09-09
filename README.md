@@ -94,7 +94,23 @@ You do not need to run `chmod`, edit shell config, or move files. After install,
 
 - Windows builds output `publish\PPTcrunch.exe` in the repository root.
 - macOS builds output `publish/osx-arm64/pptcrunch`.
-- The signed macOS installer (`./sign-macos-builds.sh`) is written to `publish/distribution/pptcrunch-macos.pkg`.
+- The signed macOS installer (`./sign-macos-builds.sh`) is written to `publish/distribution/PPTcrunchInstaller-<version>.<build>-ARM.pkg`, with a latest copy at `publish/distribution/pptcrunch-macos.pkg`.
+
+The signing script always rebuilds before packaging. Use the official Microsoft .NET 10 SDK for release builds. Publishing rejects native dependencies outside macOS system libraries, and packaging checks that the signed executable launches successfully with hardened runtime enabled.
+
+`pptcrunch.entitlements` enables JIT compilation, which the bundled .NET runtime requires under hardened runtime. Keep this file with the signing script.
+
+### Version and build numbers
+
+Run `pptcrunch --version` to print the installed version, for example `pptcrunch 1.0.0.42` (release 1.0.0, build 42).
+
+`Version.props` holds the release version, and `build-number.txt` holds the last allocated build number. Both publish scripts increment this number automatically before building. The signing script calls the macOS publisher once, so signing also allocates one new build number. Normal `dotnet build` and test runs reuse the current number. A failed publish can consume a number; gaps are intentional.
+
+The installer uses the executable's full version internally and produces a filename such as `PPTcrunchInstaller-1.0.0.42-ARM.pkg`. After successful notarization, it also updates `pptcrunch-macos.pkg` as a convenient latest copy. Previous versioned packages are retained. `PKG_VERSION` overrides are no longer supported: edit `Version.props` to change the release version.
+
+Commit `build-number.txt` along with release changes to preserve numbering across checkouts. Publish sequentially from one release checkout; independent clones or concurrent publishers do not coordinate their counters. To reset the counter, first increase the release version, then set the counter to `0`; the next publish will use build 1.
+
+If an older installer aborts with a Brotli/Homebrew “different Team IDs” error, rebuild and run `./sign-macos-builds.sh`, then reinstall the resulting package. That error means the installed executable links to a local Homebrew library that cannot load under its signature. A successful notarization alone does not verify that the program launches.
 
 ### Adding PPTcrunch to PATH (Windows)
 

@@ -1,4 +1,6 @@
 @echo off
+setlocal
+cd /d "%~dp0"
 echo.
 echo ========================================
 echo  PPTcrunch - Windows Release Publisher
@@ -9,8 +11,14 @@ echo Target: Windows x64 (no .NET runtime or FFmpeg installation required)
 echo.
 
 REM Clean and build
+dotnet msbuild increment-build.proj -t:IncrementBuildNumber -nologo
+if errorlevel 1 exit /b 1
 dotnet clean --configuration Release >nul 2>&1
+if errorlevel 1 exit /b 1
 dotnet publish PPTcrunch.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
+if errorlevel 1 exit /b 1
+publish\pptcrunch.exe --version
+if errorlevel 1 exit /b 1
 
 echo.
 echo Checking build results...
@@ -46,4 +54,4 @@ if exist publish\pptcrunch.exe (
     echo.
 )
 
-pause 
+pause

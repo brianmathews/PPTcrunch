@@ -23,14 +23,10 @@ else
     echo "Will rely on environment variables already set"
 fi
 
-if [ -z "${PKG_VERSION:-}" ]; then
-    PKG_VERSION="$(git -C "$SCRIPT_DIR" describe --tags --abbrev=0 2>/dev/null || true)"
-    PKG_VERSION="${PKG_VERSION#v}"
-    PKG_VERSION="${PKG_VERSION:-1.0.0}"
+if [ -n "${PKG_VERSION:-}" ]; then
+    echo "ERROR: PKG_VERSION is now derived from the executable. Set the release version in Version.props instead."
+    exit 1
 fi
-
-PKG_PATH="$DISTRIBUTION_DIR/${BINARY_NAME}-macos.pkg"
-VERSIONED_PKG_PATH="$DISTRIBUTION_DIR/${BINARY_NAME}-${PKG_VERSION}-macos.pkg"
 
 require_env() {
     local name="$1"
@@ -48,15 +44,18 @@ require_env APPLE_ID "your.apple.id@example.com"
 require_env APPLE_ID_PASSWORD "your-app-specific-password"
 require_env APPLE_TEAM_ID "your-team-id"
 
-if [ ! -f "$BINARY_PATH" ]; then
-    if [ -x "$PUBLISH_SCRIPT" ]; then
-        echo "Published binary not found. Running publish script..."
-        "$PUBLISH_SCRIPT"
-    else
-        echo "Error: Published binary not found at $BINARY_PATH and publish script $PUBLISH_SCRIPT is not executable"
-        exit 1
-    fi
+# Always build from current source instead of silently signing a stale artifact.
+"$PUBLISH_SCRIPT"
+
+# Read the version from this exact artifact, keeping installer and app in sync.
+APP_VERSION_OUTPUT="$("$BINARY_PATH" --version)"
+PKG_VERSION="${APP_VERSION_OUTPUT#pptcrunch }"
+if [[ ! "$PKG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: Unexpected executable version: $APP_VERSION_OUTPUT"
+    exit 1
 fi
+PKG_PATH="$DISTRIBUTION_DIR/PPTcrunchInstaller-${PKG_VERSION}-ARM.pkg"
+LATEST_PKG_PATH="$DISTRIBUTION_DIR/${BINARY_NAME}-macos.pkg"
 
 if [ ! -f "$BINARY_PATH" ]; then
     echo "Error: Published binary not found at $BINARY_PATH after running publish script"
@@ -64,6 +63,7 @@ if [ ! -f "$BINARY_PATH" ]; then
 fi
 
 echo "Preparing to sign $BINARY_PATH"
+bash "$SCRIPT_DIR/verify-macos-dependencies.sh" "$BINARY_PATH"
 ls -la "$BINARY_PATH"
 file "$BINARY_PATH"
 
@@ -77,7 +77,8 @@ if [ -f "$ENTITLEMENTS_FILE" ]; then
     echo "Entitlements file found: $ENTITLEMENTS_FILE"
     cat "$ENTITLEMENTS_FILE"
 else
-    echo "No custom entitlements file found - CLI programs typically don't require special entitlements"
+    echo "ERROR: Missing $ENTITLEMENTS_FILE; the .NET runtime requires the allow-jit entitlement."
+    exit 1
 fi
 
 echo "Checking application certificate availability..."
@@ -159,6 +160,9 @@ fi
 echo "Verifying signature..."
 codesign -v --deep --strict --verbose=2 "$BINARY_PATH"
 
+echo "Testing launch with the signed hardened runtime..."
+"$BINARY_PATH" --help > /dev/null
+
 if ! codesign -d --entitlements - "$BINARY_PATH" 2>/dev/null; then
     echo "No entitlements embedded in binary"
 fi
@@ -175,7 +179,7 @@ cp "$BINARY_PATH" "$PKG_ROOT/$BINARY_NAME"
 chmod 755 "$PKG_ROOT/$BINARY_NAME"
 xattr -cr "$PKG_ROOT/$BINARY_NAME"
 
-rm -f "$PKG_PATH" "$VERSIONED_PKG_PATH"
+rm -f "$PKG_PATH"
 
 pkgbuild \
     --root "$PKG_ROOT" \
@@ -227,11 +231,11 @@ echo "Stapling notarization ticket to installer..."
 xcrun stapler staple "$PKG_PATH"
 xcrun stapler validate "$PKG_PATH"
 
-cp "$PKG_PATH" "$VERSIONED_PKG_PATH"
+cp "$PKG_PATH" "$LATEST_PKG_PATH"
 
 echo "Signing and notarization complete!"
 echo "Distribution packages are available in: $DISTRIBUTION_DIR"
 echo "- Installer (upload this): $PKG_PATH"
-echo "- Versioned copy: $VERSIONED_PKG_PATH"
+echo "- Latest copy: $LATEST_PKG_PATH"
 echo "Installs $BINARY_NAME to $PKG_INSTALL_LOCATION (on the default macOS PATH)."
 echo "Users can run: $BINARY_NAME --help"

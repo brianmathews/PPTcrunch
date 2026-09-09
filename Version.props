@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!-- Edit the release version here; publishing increments build-number.txt. -->
+    <VersionPrefix>1.0.0</VersionPrefix>
+    <BuildNumber>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)build-number.txt').Trim())</BuildNumber>
+    <Version>$(VersionPrefix).$(BuildNumber)</Version>
+    <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
+    <FileVersion>$(Version)</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

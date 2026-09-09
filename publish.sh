@@ -8,8 +8,10 @@ printf '\n========================================\n'
 printf ' PPTcrunch - macOS Release Publisher\n'
 printf '========================================\n\n'
 
-printf 'Building self-contained single file executable with embedded FFmpeg...\n'
+printf 'Building self-contained single file executable with automatic FFmpeg download...\n'
 printf 'Target: macOS (Apple silicon, arm64) - no .NET runtime or FFmpeg installation required\n\n'
+
+dotnet msbuild "$SCRIPT_DIR/increment-build.proj" -t:IncrementBuildNumber -nologo
 
 rm -rf "$PUBLISH_DIR"
 mkdir -p "$PUBLISH_DIR"
@@ -30,6 +32,9 @@ dotnet publish "$SCRIPT_DIR/PPTcrunch.csproj" \
 printf '\nChecking build results...\n\n'
 
 if [[ -f "$PUBLISH_DIR/pptcrunch" ]]; then
+    bash "$SCRIPT_DIR/verify-macos-dependencies.sh" "$PUBLISH_DIR/pptcrunch"
+    "$PUBLISH_DIR/pptcrunch" --help > /dev/null
+    "$PUBLISH_DIR/pptcrunch" --version
     printf '========================================\n'
     printf ' Build completed successfully!\n'
     printf '========================================\n\n'
@@ -37,7 +42,7 @@ if [[ -f "$PUBLISH_DIR/pptcrunch" ]]; then
     printf '  %s\n\n' "$PUBLISH_DIR/pptcrunch"
     printf '[OK] Single-file deployment ready\n'
     printf '[OK] No external dependencies required\n'
-    printf '[OK] Embedded FFmpeg included - no external installation needed\n'
+    printf '[OK] FFmpeg is downloaded automatically on first use\n'
     printf '[OK] Auto-detects NVIDIA NVENC and Apple VideoToolbox hardware when available\n'
     printf '[OK] Self-contained includes .NET 10 runtime\n\n'
     printf 'Files in publish directory:\n'

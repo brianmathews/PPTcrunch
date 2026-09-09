@@ -24,7 +24,7 @@ dotnet publish "$SCRIPT_DIR/PPTcrunch.csproj" \
     --self-contained \
     -p:PublishSingleFile=true \
     -p:IncludeNativeLibrariesForSelfExtract=true \
-    -p:EnableCompressionInSingleFile=true \
+    -p:EnableCompressionInSingleFile=false \
     -p:TrimMode=partial \
     -p:PublishReadyToRun=true \
     -o "$PUBLISH_DIR"

@@ -54,7 +54,7 @@ public class VideoProcessor
 
         // Check if file is a supported video format
         string extension = Path.GetExtension(videoPath).ToLowerInvariant();
-        string[] supportedExtensions = { ".mp4", ".mpeg4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg", ".3gp", ".3g2", ".asf", ".ogv" };
+        string[] supportedExtensions = { ".mp4", ".mpeg4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg", ".3gp", ".3g2", ".asf", ".ogv", ".nut" };
 
         if (!supportedExtensions.Contains(extension))
         {

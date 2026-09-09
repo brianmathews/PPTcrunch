@@ -3,6 +3,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using PPTcrunch;
 
+if (args.Length == 2 && args[0] == "--capture-pipe-child")
+{
+    CapturePipeTests.Child(args[1]);
+    return;
+}
+
 static void Check(bool condition, string message)
 {
     if (!condition) throw new Exception(message);
@@ -141,6 +147,9 @@ try { await new PPTXVideoProcessor().ProcessAsync("does-not-exist.pptx", webSett
 catch (NotSupportedException) { }
 Console.WriteLine("PASS: encoder quality, compatibility, routing, filenames and PowerPoint guard.");
 await Vp9WorkflowTests.RunAsync();
+CaptureTests.Run();
+await CapturePipeTests.RunAsync();
+if (args.Contains("--capture-integration")) await CaptureTests.IntegrationAsync(args.Contains("--capture-hardware"));
 
 if (args.Contains("--platform"))
 {

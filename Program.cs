@@ -77,7 +77,7 @@ class Program
 
             if (pptxFiles.Count == 0 && videoFiles.Count == 0)
             {
-                Console.WriteLine("Error: No supported files found. Supported formats: .pptx, .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v");
+                Console.WriteLine("Error: No supported files found. Supported formats: .pptx, .mp4, .mov, .avi, .mkv, .webm, .wmv, .flv, .m4v, .nut");
                 return 1;
             }
 
@@ -421,7 +421,7 @@ class Program
         Console.WriteLine();
         Console.WriteLine("Supported file types:");
         Console.WriteLine("  - PowerPoint presentations: *.pptx");
-        Console.WriteLine("  - Video files: *.mp4, *.mov, *.avi, *.mkv, *.webm, *.wmv, *.flv, *.m4v");
+        Console.WriteLine("  - Video files: *.mp4, *.mov, *.avi, *.mkv, *.webm, *.wmv, *.flv, *.m4v, *.nut");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  PPTcrunch presentation.pptx          # Process single PowerPoint file");
@@ -485,7 +485,7 @@ class Program
         string[] videoExtensions = {
             ".mp4", ".mpeg4", ".mov", ".avi", ".mkv",
             ".webm", ".wmv", ".flv", ".m4v", ".mpg",
-            ".mpeg", ".3gp", ".3g2", ".asf", ".ogv"
+            ".mpeg", ".3gp", ".3g2", ".asf", ".ogv", ".nut"
         };
 
         return videoExtensions.Contains(extension.ToLowerInvariant());

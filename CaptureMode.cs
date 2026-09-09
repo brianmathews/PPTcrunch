@@ -1,493 +1,259 @@
 using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace PPTcrunch;
 
 public static class CaptureMode
 {
-    private class ModeOption
-    {
-        public required string Label { get; init; }
-        public required int Width { get; init; }
-        public required int Height { get; init; }
-        public required int Fps { get; init; }
-        public required string Format { get; init; } // e.g., mjpeg, yuyv422
-    }
-
-    private class RawMode
-    {
-        public required string Kind { get; init; } // vcodec or pixel_format
-        public required string Fmt { get; init; } // mjpeg, yuyv422, etc.
-        public required int W { get; init; }
-        public required int H { get; init; }
-        public required double MinF { get; init; }
-        public required double MaxF { get; init; }
-    }
-
     public static async Task<int> RunAsync()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
         {
-            Console.WriteLine("Capture mode is only supported on Windows due to DirectShow dependencies.");
+            Console.WriteLine("Video capture supports Windows and macOS.");
             return 1;
         }
-
-        Console.WriteLine("\n\nUSB Capture");
-        Console.WriteLine("============\n\n");
-
-        // Ensure embedded FFmpeg is initialized and get its path
-        string? ffmpegExe = await EmbeddedFFmpegRunner.GetFFmpegExecutablePathAsync();
-        if (string.IsNullOrWhiteSpace(ffmpegExe) || !File.Exists(ffmpegExe))
+        try { return await CaptureAsync(OperatingSystem.IsMacOS()); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            Console.WriteLine("Error: FFmpeg not available.");
+            Console.WriteLine($"Capture stopped: {ex.Message}");
             return 1;
         }
+    }
 
-        // 1) List devices
-        var devices = await ListDirectShowVideoDevicesAsync(ffmpegExe);
-        if (devices.Count == 0)
+    private static int Choose(string title, IReadOnlyList<string> labels, int defaultIndex = 0)
+    {
+        if (labels.Count == 0) throw new IOException($"No choices available for {title}.");
+        Console.WriteLine($"\n{title}");
+        for (int i = 0; i < labels.Count; i++) Console.WriteLine($"  [{i + 1}] {labels[i]}");
+        Console.Write($"Select 1-{labels.Count} (ENTER for {defaultIndex + 1}): ");
+        string answer = Console.ReadLine()?.Trim() ?? throw new IOException("Input closed.");
+        if (answer.Length == 0) return defaultIndex;
+        if (int.TryParse(answer, out int selected) && selected >= 1 && selected <= labels.Count) return selected - 1;
+        throw new IOException("Invalid selection. Run capture again to retry.");
+    }
+
+    private static async Task<int> CaptureAsync(bool mac)
+    {
+        Console.WriteLine("\nUSB Video Capture — video only\n");
+        if (mac) Console.WriteLine("Allow camera access for your terminal when macOS prompts. No microphone access is needed.");
+        string ffmpeg = await CaptureRuntime.ExecutableAsync();
+        string ffprobe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, mac ? "ffprobe" : "ffprobe.exe");
+        var listed = await CaptureSupport.Probe(ffmpeg, mac
+            ? new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-list_devices", "true", "-i", "" }
+            : new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_devices", "true", "-i", "dummy" });
+        var devices = CaptureSupport.ParseDevices(listed.Error, mac);
+        if (devices.Count == 0) throw new IOException($"No video capture devices found. Connect the card and check camera access.\n{listed.Error}");
+        int defaultDevice = Math.Max(0, devices.FindIndex(d => d.Name.Contains("USB", StringComparison.OrdinalIgnoreCase)));
+        var device = devices[Choose("Video input", devices.Select(d => d.Name).ToList(), defaultDevice)];
+        if (mac && !device.IsUniqueId)
+            throw new IOException("The capture runtime did not report a stable video device ID. Refusing to select a camera by an index that may change.");
+
+        // AVFoundation has no list_options switch. An intentionally unsupported
+        // size makes FFmpeg enumerate AVFoundation's device formats and rate ranges.
+        var queried = await CaptureSupport.Probe(ffmpeg, mac
+            ? new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-video_size", "1x1", "-framerate", "1" }
+                .Concat(CaptureSupport.DeviceInput(device, true)).Concat(new[] { "-frames:v", "1", "-f", "null", "-" })
+            : new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_options", "true", "-i", $"video={device.Id}" });
+        var formats = CaptureSupport.ParseFormats(queried.Error, mac);
+        if (formats.Count == 0) throw new IOException($"Could not discover supported capture modes.\n{queried.Error}");
+        var rates = CaptureSupport.Rates(formats, mac);
+        int defaultRate = Math.Max(0, rates.FindIndex(r => Math.Abs(r - 30) < .001));
+        double rate = rates[Choose("Frame rate", rates.Select(r => $"{CaptureSupport.Number(r)} fps").ToList(), defaultRate)];
+        var atRate = formats.Where(f => CaptureSupport.SupportsRate(f, rate, mac)).ToList();
+        var sizes = atRate.Select(f => (f.Width, f.Height)).Distinct().OrderBy(s => s.Height).ThenBy(s => s.Width).ToList();
+        int defaultSize = Math.Max(0, sizes.FindIndex(s => s.Width == 1920 && s.Height == 1080));
+        var size = sizes[Choose("Resolution", sizes.Select(s => $"{s.Width} × {s.Height}").ToList(), defaultSize)];
+        var available = atRate.Where(f => f.Width == size.Width && f.Height == size.Height).ToList();
+        List<(string Kind, string Format)> colors;
+        if (mac)
         {
-            Console.WriteLine("No DirectShow video devices found.");
-            return 1;
+            // Request a seldom-supported but valid AVFoundation pixel format to get
+            // its advertised output list. If supported, it is itself a verified choice.
+            var probeMode = new CaptureSelection(device, size.Width, size.Height, rate, "pixel_format", "monob");
+            var pixels = await CaptureSupport.Probe(ffmpeg, CaptureSupport.Input(probeMode, true)
+                .Concat(new[] { "-nostdin", "-frames:v", "1", "-an", "-c:v", "copy", "-f", "null", "-" }));
+            colors = CaptureSupport.ParsePixels(pixels.Error).Select(p => ("pixel_format", p)).ToList();
+            if (colors.Count == 0 && pixels.Code == 0) colors.Add(("pixel_format", "monob"));
+            if (colors.Count == 0) throw new IOException($"Could not discover pixel formats.\n{pixels.Error}");
         }
-
-        Console.WriteLine("\nAvailable video capture devices:");
-        int defaultDeviceIndex = Math.Max(0, devices.FindIndex(d => string.Equals(d, "USB Video", StringComparison.OrdinalIgnoreCase)));
-        for (int i = 0; i < devices.Count; i++)
+        else colors = available.Select(f => (f.Kind, f.Format)).Distinct().OrderBy(f => f.Format != "mjpeg").ToList();
+        Console.WriteLine("\nChoose the output format to request from the capture card/driver.");
+        if (mac)
         {
-            Console.WriteLine($"  [{i}] {devices[i]}");
+            Console.WriteLine("On macOS, these are the formats macOS delivers; it may decode or convert the card's video first.");
         }
-        Console.WriteLine($"\nDefault: [{defaultDeviceIndex}] {devices[defaultDeviceIndex]}");
-        Console.Write("Select device index (ENTER for default): ");
-        string? deviceInput = Console.ReadLine();
-        int deviceIndex;
-        if (string.IsNullOrWhiteSpace(deviceInput)) deviceIndex = defaultDeviceIndex;
-        else if (!int.TryParse(deviceInput, out deviceIndex) || deviceIndex < 0 || deviceIndex >= devices.Count)
-        {
-            Console.WriteLine("Invalid selection.");
-            return 1;
-        }
-        string selectedDevice = devices[deviceIndex];
-        Console.WriteLine($"Selected device: \"{selectedDevice}\"\n");
+        if (colors.Any(c => c.Format is "uyvy422" or "yuyv422") && colors.Any(c => c.Format is "nv12" or "nv21"))
+            Console.WriteLine("For best color detail among the YUV choices below, prefer UYVY/YUYV; choose NV12/NV21 for less data.");
+        Console.WriteLine("A richer output format cannot restore detail already lost in the source or card.");
+        int colorIndex = Choose("Capture card output format", colors.Select(c => CaptureSupport.DescribeFormat(c.Kind, c.Format)).ToList());
+        var color = colors[colorIndex];
+        var selection = new CaptureSelection(device, size.Width, size.Height, rate, color.Kind, color.Format);
 
-        // 2) Query raw modes for selected device
-        var rawModes = await ListRawModesForDeviceAsync(ffmpegExe, selectedDevice);
-        if (rawModes.Count == 0)
-        {
-            Console.WriteLine("No modes parsed from FFmpeg output.");
-            return 1;
-        }
-
-        // 2a) Select frame rate (discrete list)
-        int[] candidateFps = new[] { 60, 50, 30, 25, 20, 15, 10, 5 };
-        var fpsOptions = candidateFps.Where(f => rawModes.Any(r => f >= Math.Floor(r.MinF) && f <= Math.Ceiling(r.MaxF))).ToList();
-        if (fpsOptions.Count == 0)
-        {
-            Console.WriteLine("No discrete frame rates available from device.");
-            return 1;
-        }
-
-        Console.WriteLine($"\nAvailable frame rates for '{selectedDevice}':");
-        int defaultFpsIndex = fpsOptions.IndexOf(30);
-        if (defaultFpsIndex < 0) defaultFpsIndex = 0;
-        for (int i = 0; i < fpsOptions.Count; i++)
-        {
-            Console.WriteLine($"  [{i}] {fpsOptions[i]} fps");
-        }
-        Console.WriteLine($"\nDefault: [{defaultFpsIndex}] {fpsOptions[defaultFpsIndex]} fps");
-        Console.Write("Select frame rate index (ENTER for default): ");
-        string? fpsInput = Console.ReadLine();
-        int fpsIndex;
-        if (string.IsNullOrWhiteSpace(fpsInput)) fpsIndex = defaultFpsIndex;
-        else if (!int.TryParse(fpsInput, out fpsIndex) || fpsIndex < 0 || fpsIndex >= fpsOptions.Count)
-        {
-            Console.WriteLine("Invalid selection.");
-            return 1;
-        }
-        int chosenFps = fpsOptions[fpsIndex];
-        Console.WriteLine($"Selected framerate: {chosenFps} fps\n");
-
-        // 2b) Resolutions supported at chosen fps with format options
-        var supportedAtFps = rawModes.Where(r => chosenFps >= Math.Floor(r.MinF) && chosenFps <= Math.Ceiling(r.MaxF)).ToList();
-        if (supportedAtFps.Count == 0)
-        {
-            Console.WriteLine("No resolutions supported for the selected frame rate.");
-            return 1;
-        }
-
-        var resolutionGroups = supportedAtFps
-            .GroupBy(r => new { r.W, r.H })
-            .Select(g => new
-            {
-                W = g.Key.W,
-                H = g.Key.H,
-                Formats = g.Select(x => x.Fmt).Distinct().OrderBy(f => f != "mjpeg").ThenBy(f => f).ToList()
-            })
-            .OrderBy(x => x.H)
-            .ThenBy(x => x.W)
-            .ToList();
-
-        if (resolutionGroups.Count == 0)
-        {
-            Console.WriteLine("No resolutions available for the selected frame rate.");
-            return 1;
-        }
-
-        Console.WriteLine($"\nAvailable resolutions at {chosenFps} fps:");
-        int defaultResIndex = resolutionGroups.FindIndex(r => r.W == 1920 && r.H == 1080);
-        if (defaultResIndex < 0) defaultResIndex = 0;
-        for (int i = 0; i < resolutionGroups.Count; i++)
-        {
-            var formatList = string.Join(", ", resolutionGroups[i].Formats.Select(f => FormatDisplayName(f)));
-            Console.WriteLine($"  [{i}] {resolutionGroups[i].W}x{resolutionGroups[i].H} ({formatList})");
-        }
-        Console.WriteLine($"\nDefault: [{defaultResIndex}] {resolutionGroups[defaultResIndex].W}x{resolutionGroups[defaultResIndex].H}");
-        Console.Write("Select resolution index (ENTER for default): ");
-        string? resInput = Console.ReadLine();
-        int resIndex;
-        if (string.IsNullOrWhiteSpace(resInput)) resIndex = defaultResIndex;
-        else if (!int.TryParse(resInput, out resIndex) || resIndex < 0 || resIndex >= resolutionGroups.Count)
-        {
-            Console.WriteLine("Invalid selection.");
-            return 1;
-        }
-
-        var resChoice = resolutionGroups[resIndex];
-        Console.WriteLine($"Selected resolution: {resChoice.W}x{resChoice.H}\n");
-
-        // 2c) Select compression format if multiple options available
-        string selectedFormat;
-        if (resChoice.Formats.Count == 1)
-        {
-            selectedFormat = resChoice.Formats[0];
-            Console.WriteLine($"Using compression format: {FormatDisplayName(selectedFormat)}\n");
-        }
-        else
-        {
-            Console.WriteLine($"Available compression formats for {resChoice.W}x{resChoice.H} at {chosenFps} fps:");
-            int defaultFormatIndex = resChoice.Formats.IndexOf("mjpeg");
-            if (defaultFormatIndex < 0) defaultFormatIndex = 0;
-            for (int i = 0; i < resChoice.Formats.Count; i++)
-            {
-                Console.WriteLine($"  [{i}] {FormatDisplayName(resChoice.Formats[i])}");
-            }
-            Console.WriteLine($"\nDefault: [{defaultFormatIndex}] {FormatDisplayName(resChoice.Formats[defaultFormatIndex])}");
-            Console.Write("Select compression format index (ENTER for default): ");
-            string? formatInput = Console.ReadLine();
-            int formatIndex;
-            if (string.IsNullOrWhiteSpace(formatInput)) formatIndex = defaultFormatIndex;
-            else if (!int.TryParse(formatInput, out formatIndex) || formatIndex < 0 || formatIndex >= resChoice.Formats.Count)
-            {
-                Console.WriteLine("Invalid selection.");
-                return 1;
-            }
-            selectedFormat = resChoice.Formats[formatIndex];
-            Console.WriteLine($"Selected compression format: {FormatDisplayName(selectedFormat)}\n");
-        }
-
-        var selectedMode = new ModeOption
-        {
-            Label = $"{resChoice.W}x{resChoice.H}@{chosenFps} {selectedFormat}",
-            Width = resChoice.W,
-            Height = resChoice.H,
-            Fps = chosenFps,
-            Format = selectedFormat
-        };
-        Console.WriteLine($"Selected mode : {selectedMode.Label}\n");
-
-        // 3) Choose recording mode (direct copy/lossless vs live transcode)
-        Console.WriteLine("Choose recording mode:");
-        Console.WriteLine("  1. Direct storage (no transcoding): copy MJPEG or lossless FFV1");
-        Console.WriteLine("  2. Transcode while recording (H.264/H.265)\n");
-        Console.Write("Enter your choice (1-2, default: 1): ");
-        string? modeInput = Console.ReadLine();
-        bool liveTranscode = false;
-        if (!string.IsNullOrWhiteSpace(modeInput) && int.TryParse(modeInput, out int modeChoice))
-        {
-            liveTranscode = modeChoice == 2;
-        }
-
-        // 4) If transcoding, collect codec/quality/GPU/resolution preferences (realtime-safe presets)
-        var settings = new UserSettings();
-        if (liveTranscode)
-        {
-            Console.WriteLine();
-            Console.WriteLine("Live Transcode Settings");
-            Console.WriteLine("-----------------------");
-
-            // Detect GPU capabilities
-            var gpuInfo = await GPUDetectionService.DetectGPUCapabilitiesAsync();
-            if (gpuInfo.SupportsHardwareAcceleration)
-            {
-                string hardwarePrompt = gpuInfo.HardwareAcceleration switch
-                {
-                    HardwareAccelerationMode.NvidiaNvenc => "Use NVIDIA NVENC hardware acceleration for faster real-time encoding?",
-                    HardwareAccelerationMode.AppleVideoToolbox => "Use Apple VideoToolbox hardware acceleration for faster real-time encoding?",
-                    _ => "Use hardware acceleration for faster real-time encoding?"
-                };
-                Console.Write($"{hardwarePrompt} (Y/n, default: Y): ");
-                string? gpuInput = Console.ReadLine()?.Trim().ToLowerInvariant();
-                settings.UseGPUAcceleration = string.IsNullOrEmpty(gpuInput) || gpuInput == "y" || gpuInput == "yes";
-                settings.HardwareAcceleration = settings.UseGPUAcceleration ? gpuInfo.HardwareAcceleration : HardwareAccelerationMode.None;
-            }
-            else
-            {
-                settings.UseGPUAcceleration = false;
-                settings.HardwareAcceleration = HardwareAccelerationMode.None;
-                Console.WriteLine("Hardware acceleration not available - will use CPU (optimize for real-time)");
-            }
-
-            // Codec preference
-            Console.WriteLine();
-            Console.WriteLine("Video codec options:");
-            Console.WriteLine("  1. H.264 (better compatibility)");
-            Console.WriteLine("  2. H.265 (smaller files, more CPU/GPU cost)");
-            if (settings.UseGPUAcceleration && !gpuInfo.SupportsH265)
-            {
-                Console.WriteLine("     Note: Your hardware encoder doesn't support H.265 - H.264 will be used if selected");
-            }
-            Console.Write("Enter your choice (1 or 2, default: 2): ");
-            string? codecInput = Console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(codecInput) && int.TryParse(codecInput, out int codecChoice))
-            {
-                if (codecChoice == 1) settings.Codec = VideoCodec.H264;
-                else if (codecChoice == 2)
-                {
-                    if (settings.UseGPUAcceleration && !gpuInfo.SupportsH265) settings.Codec = VideoCodec.H264;
-                    else settings.Codec = VideoCodec.H265;
-                }
-            }
-
-            // Quality level (maps to CRF/CQ/Q)
-            Console.WriteLine();
-            Console.WriteLine("Quality level options:");
-            var qcfg = QualityConfigService.GetConfig();
-            foreach (var kvp in qcfg.QualityLevels.OrderBy(x => int.Parse(x.Key)))
-            {
-                Console.WriteLine($"  {kvp.Key}. {kvp.Value.Name}");
-            }
-            Console.Write("Enter your choice (0-4, default: 2): ");
-            string? qInput = Console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(qInput) && int.TryParse(qInput, out int qLevel) && qLevel >= 0 && qLevel <= 4)
-            {
-                settings.QualityLevel = qLevel;
-            }
-
-            // Optional downscale for real-time headroom
-            Console.WriteLine();
-            Console.Write($"Limit width to 1920 for smoother real-time encoding? (Y/n, default: Y): ");
-            string? resLimitInput = Console.ReadLine()?.Trim().ToLowerInvariant();
-            settings.ReduceHighResTo1920 = string.IsNullOrEmpty(resLimitInput) || resLimitInput == "y" || resLimitInput == "yes";
-            settings.MaxWidth = settings.ReduceHighResTo1920 ? 1920 : int.MaxValue;
-        }
-
-        // 5) Prompt for output filename
-        string ts = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-        string baseName = $"{ts}_{selectedMode.Width}x{selectedMode.Height}@{selectedMode.Fps}";
-        string suggested = liveTranscode ? ($"{baseName}.mp4") : ($"{baseName}.mkv");
-        Console.WriteLine($"Suggested filename: {suggested}");
-        Console.Write("Output filename (ENTER to accept): ");
-        string? outName = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(outName)) outName = suggested;
-        if (string.IsNullOrWhiteSpace(Path.GetExtension(outName))) outName += liveTranscode ? ".mp4" : ".mkv";
-
-        // 6) Build ffmpeg command
-        var inputArgs = new StringBuilder();
-        inputArgs.Append("-hide_banner -f dshow -rtbufsize 512M ");
-        inputArgs.Append($"-video_size {selectedMode.Width}x{selectedMode.Height} ");
-        inputArgs.Append($"-framerate {selectedMode.Fps} ");
-        inputArgs.Append($"-vcodec {selectedMode.Format} ");
-        inputArgs.Append($"-i video=\"{selectedDevice}\" ");
-
-        string vopts;
-        if (!liveTranscode)
-        {
-            vopts = string.Equals(selectedMode.Format, "mjpeg", StringComparison.OrdinalIgnoreCase)
-                ? "-c:v copy -fps_mode passthrough"
-                : "-pix_fmt yuv422p -c:v ffv1 -level 3 -g 1";
-        }
-        else
-        {
-            // Build real-time transcode options from settings
-            var enc = QualityConfigService.GetEncodingSettings(settings.QualityLevel, settings.Codec, settings.UseGPUAcceleration);
-            var cparams = QualityConfigService.GetCodecParams(settings.Codec, settings.UseGPUAcceleration);
-
-            string scaleFilter = settings.MaxWidth == int.MaxValue
-                ? "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-                : $"scale='if(gt(iw,{settings.MaxWidth}),{settings.MaxWidth},iw)':'if(gt(iw,{settings.MaxWidth}),trunc(ih*{settings.MaxWidth}/iw/2)*2,ih)'";
-
-            var sb = new StringBuilder();
-            sb.Append($"-vf \"{scaleFilter}\" ");
-
-            if (settings.UseGPUAcceleration)
-            {
-                // NVENC/VideoToolbox real-time tuned
-                sb.Append($"-c:v {settings.GetGpuCodecName()} ");
-                if (!string.IsNullOrEmpty(enc.Rc)) sb.Append($"-rc {enc.Rc} ");
-                if (enc.Cq.HasValue) sb.Append($"-cq {enc.Cq.Value} ");
-                sb.Append("-b:v 0 ");
-                // Prefer faster preset for real-time than offline defaults
-                string realtimePreset = string.IsNullOrEmpty(enc.Preset) ? "medium" : (enc.Preset == "slow" ? "medium" : enc.Preset);
-                sb.Append($"-preset {realtimePreset} ");
-                if (!string.IsNullOrEmpty(enc.Tune)) sb.Append($"-tune {enc.Tune} ");
-                if (enc.Multipass.HasValue) sb.Append($"-multipass {enc.Multipass.Value} ");
-                if (!string.IsNullOrEmpty(cparams.Profile)) sb.Append($"-profile:v {cparams.Profile} ");
-                if (cparams.Bf.HasValue) sb.Append($"-bf {cparams.Bf.Value} ");
-                if (cparams.Refs.HasValue) sb.Append($"-refs {cparams.Refs.Value} ");
-                if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(cparams.Tag)) sb.Append($"-tag:v {cparams.Tag} ");
-                sb.Append("-pix_fmt yuv420p ");
-            }
-            else
-            {
-                // CPU real-time tuned (use faster presets)
-                sb.Append($"-c:v {settings.GetCpuCodecName()} ");
-                if (enc.Crf.HasValue) sb.Append($"-crf {enc.Crf.Value} ");
-                string cpuPreset = settings.Codec == VideoCodec.H265 ? "faster" : "veryfast";
-                sb.Append($"-preset {cpuPreset} ");
-                if (!string.IsNullOrEmpty(cparams.Profile)) sb.Append($"-profile:v {cparams.Profile} ");
-                if (cparams.Bf.HasValue) sb.Append($"-bf {cparams.Bf.Value} ");
-                if (cparams.Refs.HasValue) sb.Append($"-refs {cparams.Refs.Value} ");
-                if (settings.Codec == VideoCodec.H265 && !string.IsNullOrEmpty(cparams.Tag)) sb.Append($"-tag:v {cparams.Tag} ");
-            }
-
-            // Audio copy if present; optimize for MP4 playback
-            sb.Append("-c:a copy -movflags +faststart -y -stats");
-            vopts = sb.ToString();
-        }
-
-        Console.WriteLine();
-        Console.WriteLine("==============================================================");
-        Console.WriteLine("Press 'q' in the FFmpeg console to stop the recording.");
-        Console.WriteLine("==============================================================\n");
-
-        Console.WriteLine("Running:");
-        Console.WriteLine($"{ffmpegExe} {inputArgs}{vopts} \"{outName}\"\n");
-
-        // Launch FFmpeg inheriting the current console so user can press 'q'
-        var psi = new ProcessStartInfo
-        {
-            FileName = ffmpegExe,
-            Arguments = inputArgs.ToString() + vopts + " \"" + outName + "\"",
-            UseShellExecute = false,
-            RedirectStandardInput = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false,
-            CreateNoWindow = false
-        };
-
+        string temp = Path.Combine(Path.GetTempPath(), "pptcrunch-capture-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc == null)
+            Console.WriteLine("\nChecking the selected input with a short video sample...");
+            string sample = Path.Combine(temp, "input.nut");
+            var sampled = await CaptureSupport.Probe(ffmpeg, CaptureSupport.Input(selection, mac)
+                .Concat(new[] { "-nostdin", "-map", "0:v:0", "-an", "-frames:v", "12", "-c:v", "copy", "-f", "nut", "-n", sample }), 45);
+            if (sampled.Code != 0 || HasModeFallback(sampled.Error))
+                throw new IOException($"The requested input mode could not be used exactly.\n{sampled.Error}");
+            var inspected = await CaptureSupport.Probe(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=codec_name,pix_fmt,width,height:packet=pts_time", "-show_packets", "-of", "json", sample });
+            if (inspected.Code != 0) throw new IOException(inspected.Error);
+            var stream = ReadStream(inspected.Output);
+            double measuredRate = SampleRate(inspected.Output);
+            if (Math.Abs(measuredRate / rate - 1) > .15)
+                throw new IOException($"Device delivered about {measuredRate:F2} fps instead of {CaptureSupport.Number(rate)} fps. Choose another mode or check the signal.");
+            if (stream.Width != size.Width || stream.Height != size.Height)
+                throw new IOException($"Device delivered {stream.Width}x{stream.Height}, not the selected resolution.");
+            if (color.Kind == "pixel_format" && stream.PixelFormat != color.Format && !(color.Format == "gray8" && stream.PixelFormat == "gray"))
+                throw new IOException($"Device delivered {stream.PixelFormat}, not {color.Format}.");
+            if (color.Kind == "vcodec" && stream.Codec != color.Format)
+                throw new IOException($"Device delivered {stream.Codec}, not {color.Format}.");
+            Console.WriteLine($"Received: {stream.Codec}, {stream.PixelFormat}, {stream.Width}x{stream.Height}; sample rate {measuredRate:F2} fps (requested {CaptureSupport.Number(rate)}).");
+
+            var modes = new List<CaptureRecording> { CaptureRecording.Direct };
+            var labels = new List<string>
             {
-                Console.WriteLine("Failed to start FFmpeg.");
-                return 1;
+                "Pass-through — NO additional transcoding\n" +
+                (stream.Codec == "rawvideo"
+                    ? $"      Save the received {stream.PixelFormat} pixels uncompressed.\n      Lowest encoding work; very large files and high disk throughput."
+                    : $"      Save the received {stream.Codec} stream with its existing compression.\n      No re-encoding and no additional compression quality loss.")
+            };
+            if (CaptureSupport.LosslessPixel(stream.PixelFormat) != null)
+            {
+                modes.Add(CaptureRecording.LosslessCpu);
+                labels.Add("Lossless transcoding — FFV1 using the CPU\n" +
+                    "      Compress without losing any received picture detail.\n" +
+                    "      Uses CPU processing; file size and speed depend on the video.");
             }
-            await proc.WaitForExitAsync();
-            return proc.ExitCode;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error running FFmpeg: {ex.Message}");
-            return 1;
-        }
-    }
-
-    private static async Task<List<string>> ListDirectShowVideoDevicesAsync(string ffmpegExe)
-    {
-        var devices = new List<string>();
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = ffmpegExe,
-            Arguments = "-hide_banner -f dshow -list_devices true -i dummy",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-
-        using var proc = Process.Start(psi);
-        if (proc == null) return devices;
-
-        string stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-
-        var lines = stderr.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-        var rx = new Regex("^\\s*\\[.*\\]\\s*\"(.+)\"\\s*\\(video\\)");
-        foreach (var line in lines)
-        {
-            var m = rx.Match(line);
-            if (m.Success)
+            modes.Add(CaptureRecording.LossyHardware);
+            labels.Add("Lossy transcoding — H.264/H.265 using " + (mac ? "Apple hardware" : "NVIDIA hardware") + "\n" +
+                "      Smaller files by discarding some picture detail.\n" +
+                "      You choose the target quality; the hardware handles encoding.");
+            modes.Add(CaptureRecording.LossyCpu);
+            labels.Add("Lossy transcoding — H.264/H.265 using the CPU\n" +
+                "      Smaller files by discarding some picture detail.\n" +
+                "      You choose the target quality; uses more CPU processing.");
+            Console.WriteLine("\nNow choose how to save the received video.");
+            Console.WriteLine("Pass-through copies the stream; transcoding creates a new encoded stream.");
+            Console.WriteLine("Choose pass-through for minimal encoding work; uncompressed input needs a fast disk.");
+            Console.WriteLine("Choose lossless to preserve all received picture detail, or lossy for smaller files.");
+            Console.WriteLine("Pass-through and lossless modes cannot restore detail already lost in the card or driver.");
+            if (mac) Console.WriteLine("Pass-through preserves what macOS delivers, which may differ from the card's original compressed stream.");
+            var recording = modes[Choose("Recording mode — how the file is stored", labels)];
+            var hardware = mac ? HardwareAccelerationMode.AppleVideoToolbox : HardwareAccelerationMode.NvidiaNvenc;
+            var codec = VideoCodec.H264;
+            int quality = 2;
+            if (recording is CaptureRecording.LossyCpu or CaptureRecording.LossyHardware)
             {
-                string name = m.Groups[1].Value.Trim();
-                devices.Add(name);
+                codec = Choose("Output codec", new[] { "H.264 (widest compatibility)", "H.265 (more compression)" }) == 0 ? VideoCodec.H264 : VideoCodec.H265;
+                quality = Choose("Target quality (lossy, 8-bit YUV 4:2:0)", new[] { "0 — Passable", "1 — Good", "2 — Better", "3 — High quality", "4 — Archive quality (still lossy)" }, 2);
+                if (size.Width % 2 != 0 || size.Height % 2 != 0)
+                    throw new IOException("H.264/H.265 capture requires even dimensions. Choose an even capture resolution or direct/lossless recording.");
             }
-        }
-
-        return devices;
-    }
-
-    private static async Task<List<RawMode>> ListRawModesForDeviceAsync(string ffmpegExe, string deviceName)
-    {
-        var rawModes = new List<RawMode>();
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = ffmpegExe,
-            Arguments = $"-hide_banner -f dshow -list_options true -i video=\"{deviceName}\"",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-
-        using var proc = Process.Start(psi);
-        if (proc == null) return new List<RawMode>();
-
-        string stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-
-        var lines = stderr.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-
-        // Matches both vcodec and pixel_format entries
-        var rx = new Regex("^(?:\\s*\\[.*\\]\\s*)?(?<key>vcodec|pixel_format)=(?<fmt>\\S+)\\s+min s=(?<w>\\d+)x(?<h>\\d+)\\s+fps=(?<min>[\\d\\.]+)\\s+max s=\\k<w>x\\k<h>\\s+fps=(?<max>[\\d\\.]+)");
-        foreach (var line in lines)
-        {
-            var m = rx.Match(line);
-            if (m.Success)
+            var outputOptions = CaptureSupport.Output(recording, stream, codec, hardware, quality);
+            string extension = CaptureSupport.Extension(CaptureSupport.Container(recording, stream));
+            string trial = Path.Combine(temp, "test" + extension);
+            // Use the actual received sample and the exact output codec/muxer options.
+            // Failure never silently switches hardware, changes quality, or truncates a recording.
+            Console.WriteLine("Checking the recording codec and container...");
+            var checkedOutput = await CaptureSupport.Probe(ffmpeg, new[] { "-hide_banner", "-nostdin", "-i", sample }
+                .Concat(outputOptions).Concat(new[] { "-n", trial }));
+            if (checkedOutput.Code != 0 || checkedOutput.Error.Contains("Incompatible pixel format", StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"Recording mode unavailable for this input. Choose another mode or codec.\n{checkedOutput.Error}");
+            var trialInfo = await CaptureSupport.Probe(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries",
+                "stream=codec_name,pix_fmt,width,height", "-of", "json", trial });
+            if (trialInfo.Code != 0) throw new IOException(trialInfo.Error);
+            var encoded = ReadStream(trialInfo.Output);
+            string expectedCodec = recording switch
             {
-                rawModes.Add(new RawMode
+                CaptureRecording.Direct => stream.Codec,
+                CaptureRecording.LosslessCpu => "ffv1",
+                _ => codec == VideoCodec.H264 ? "h264" : "hevc"
+            };
+            string expectedPixel = recording switch
+            {
+                CaptureRecording.Direct => stream.PixelFormat,
+                CaptureRecording.LosslessCpu => CaptureSupport.LosslessPixel(stream.PixelFormat)!,
+                _ => "yuv420p"
+            };
+            if (encoded.Codec != expectedCodec || encoded.PixelFormat != expectedPixel || encoded.Width != size.Width || encoded.Height != size.Height)
+                throw new IOException($"Recording codec changed the requested output format: {encoded}. Choose another mode.");
+            string suggested = $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{size.Width}x{size.Height}@{CaptureSupport.Number(rate)}_{recording}{extension}";
+            Console.Write($"\nOutput filename (ENTER for {suggested}): ");
+            string path = Console.ReadLine()?.Trim() ?? throw new IOException("Input closed.");
+            if (path.Length == 0) path = suggested;
+            if (Path.GetExtension(path).Length == 0) path += extension;
+            if (!string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"This recording mode uses {extension}. Choose that extension so the container matches the filename.");
+            path = Path.GetFullPath(path);
+            if (File.Exists(path)) throw new IOException($"File already exists; choose a new filename: {path}");
+            if (!Directory.Exists(Path.GetDirectoryName(path))) throw new IOException("Output directory does not exist.");
+            Console.WriteLine($"\nReady to record video only to {path}");
+            if (recording == CaptureRecording.Direct && stream.Codec == "rawvideo")
+                Console.WriteLine("Uncompressed direct copy needs high disk throughput and creates large NUT files.");
+            Console.WriteLine("Watch FFmpeg's speed and buffer/drop warnings; sustained capture depends on the card, encoder, and disk.");
+            Console.WriteLine("\nHOW TO STOP RECORDING");
+            Console.WriteLine("Press q in this terminal to stop recording and finish saving the file.");
+            Console.WriteLine("Wait for the 'Recording saved' message before closing the terminal.");
+            Console.Write("\nPress ENTER to start recording, or Ctrl+C to cancel: ");
+            if (Console.ReadLine() == null) throw new IOException("Input closed before recording started.");
+            Console.WriteLine("\nStarting recording...");
+            var arguments = CaptureSupport.Input(selection, mac).Concat(outputOptions).Concat(new[] { "-stats", "-n", path }).ToList();
+            var info = CaptureSupport.StartInfo(ffmpeg, arguments, false);
+            info.RedirectStandardError = true;
+            using var proc = Process.Start(info) ?? throw new IOException("Could not start recording.");
+            bool modeChanged = false;
+            var diagnostics = CaptureSupport.ReadLines(proc.StandardError, line =>
+            {
+                Console.Error.WriteLine(line);
+                if (HasModeFallback(line) || line.Contains("Incompatible pixel format", StringComparison.OrdinalIgnoreCase))
                 {
-                    Kind = m.Groups["key"].Value,
-                    Fmt = m.Groups["fmt"].Value,
-                    W = int.Parse(m.Groups["w"].Value),
-                    H = int.Parse(m.Groups["h"].Value),
-                    MinF = double.Parse(m.Groups["min"].Value, System.Globalization.CultureInfo.InvariantCulture),
-                    MaxF = double.Parse(m.Groups["max"].Value, System.Globalization.CultureInfo.InvariantCulture)
-                });
-            }
+                    modeChanged = true;
+                    if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                }
+            });
+            // Let FFmpeg receive terminal Ctrl+C and finalize its container; keep the
+            // parent alive until the child has exited. 'q' is the normal stop control.
+            ConsoleCancelEventHandler cancel = (_, e) => e.Cancel = true;
+            Console.CancelKeyPress += cancel;
+            try { await Task.WhenAll(proc.WaitForExitAsync(), diagnostics); }
+            finally { Console.CancelKeyPress -= cancel; }
+            if (modeChanged)
+                Console.WriteLine("Recording stopped because the input or encoder changed the requested format. Any partial file has been retained.");
+            else if (proc.ExitCode != 0)
+                Console.WriteLine($"FFmpeg exited with code {proc.ExitCode}. Any partial recording has been retained at {path}.");
+            else Console.WriteLine($"Recording saved: {path}");
+            return modeChanged ? 1 : proc.ExitCode;
         }
-
-        return rawModes;
+        finally { Directory.Delete(temp, recursive: true); }
     }
 
-    private static string FormatDisplayName(string format)
+    internal static bool HasModeFallback(string log) =>
+        log.Contains("Overriding selected pixel format", StringComparison.OrdinalIgnoreCase) ||
+        log.Contains("falling back to default", StringComparison.OrdinalIgnoreCase);
+
+    internal static CaptureStream ReadStream(string json)
     {
-        return format.ToLowerInvariant() switch
-        {
-            "mjpeg" => "MJPEG",
-            "yuyv422" => "YUV422",
-            "nv12" => "NV12",
-            "rgb24" => "RGB24",
-            "bgr24" => "BGR24",
-            "uyvy422" => "UYVY422",
-            _ => format.ToUpperInvariant()
-        };
+        using var doc = JsonDocument.Parse(json);
+        var streams = doc.RootElement.GetProperty("streams");
+        if (streams.GetArrayLength() != 1) throw new IOException("Expected one captured video stream.");
+        var s = streams[0];
+        return new(s.GetProperty("codec_name").GetString()!, s.GetProperty("pix_fmt").GetString()!,
+            s.GetProperty("width").GetInt32(), s.GetProperty("height").GetInt32());
     }
 
+    internal static double SampleRate(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var times = doc.RootElement.GetProperty("packets").EnumerateArray()
+            .Where(p => p.TryGetProperty("pts_time", out _))
+            .Select(p => double.Parse(p.GetProperty("pts_time").GetString()!, System.Globalization.CultureInfo.InvariantCulture)).Order().ToArray();
+        var intervals = times.Zip(times.Skip(1), (a, b) => b - a).Where(t => t > 0).Order().ToArray();
+        if (intervals.Length < 2) throw new IOException("Not enough captured timestamps to verify the frame rate.");
+        return 1 / intervals[intervals.Length / 2];
+    }
 }
-
-

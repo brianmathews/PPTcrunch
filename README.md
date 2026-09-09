@@ -36,7 +36,7 @@ PPTcrunch is a .NET 10 console application that compresses videos using quality-
 - **Robust Error Handling**: Gracefully handles compression failures and GPU unavailability
 - **File Size Optimization**: Maintains original files when compression doesn't reduce size
 - **Backup Preservation**: Keeps original PPTX file unchanged as backup
-- **Direct-to-Disk Capture**: Record from USB HDMI capture devices to disk with no transcoding (MJPEG copy) or lossless FFV1 for uncompressed input
+- **Video Capture on Windows and macOS**: Record USB HDMI video using direct stream copy, CPU lossless FFV1, or hardware/CPU H.264/H.265 encoding
 
 ## Prerequisites
 
@@ -98,6 +98,8 @@ You do not need to run `chmod`, edit shell config, or move files. After install,
 
 The signing script always rebuilds before packaging. Use the official Microsoft .NET 10 SDK for release builds. Publishing rejects native dependencies outside macOS system libraries, and packaging checks that the signed executable launches successfully with hardened runtime enabled.
 
+macOS publishing keeps the single-file executable uncompressed. Compressed bundles reproduced intermittent .NET 10 access violations while reading FFmpeg's device-list output on Apple silicon; uncompressed bundles passed repeated startup checks. This increases the executable's size and does not change video compression settings. To repeat the startup check without recording, run `python3 tests/capture-startup-stress.py publish/osx-arm64/pptcrunch --runs 200` with a connected video device and device-list access.
+
 `pptcrunch.entitlements` enables JIT compilation, which the bundled .NET runtime requires under hardened runtime. Keep this file with the signing script.
 
 ### Version and build numbers
@@ -155,7 +157,7 @@ After building (`publish.bat` on Windows or `publish.sh` on macOS), run the exec
 - Windows: `PPTcrunch.exe <file-pattern>`
 - macOS: `pptcrunch <file-pattern>` (installer) or `./pptcrunch <file-pattern>` (local build)
 
-Capture mode uses Windows-only DirectShow APIs and remains available as `PPTcrunch.exe capture` on Windows.
+Start video-only capture with `PPTcrunch.exe capture` on Windows or `pptcrunch capture` on macOS.
 
 ### Examples
 
@@ -211,57 +213,34 @@ Selected settings:
 
 ## Capture Mode
 
-The capture mode records video directly from a USB HDMI capture device to disk, without transcoding when possible.
+Capture mode records **video only** from a USB HDMI capture card on Windows (DirectShow) or macOS (AVFoundation). Run `PPTcrunch.exe capture` or `pptcrunch capture`.
 
-Workflow:
+The app discovers devices, frame rates, resolutions, and capture formats each time it runs. It lists resolutions compatible with the selected frame rate, including fractional rates such as 29.97/59.94 when advertised. On macOS, FFmpeg selects the maximum frame rate of each advertised format range, so those are the offered rates. Screen and audio devices are excluded from the macOS menu. The selected card is addressed by its stable device ID, so a change in device index order cannot redirect recording to a different camera.
 
-1. Device selection
-   - Enumerates DirectShow video devices via FFmpeg
-   - Default selection prefers a device named "USB Video" if present
-2. Frame rate selection
-   - Detects supported frame rates from the device's advertised ranges
-   - Prompts with discrete options (e.g., 60, 50, 30, 25, 20, 15, 10, 5)
-   - Default: 30 fps if available
-3. Resolution selection
-  -Lists only resolutions compatible with the chosen frame rate
-   - Shows available compression formats for each resolution (e.g., "1920x1080 (YUV422, MJPEG)")
-   - Default: 1920x1080 if available at the chosen frame rate
-4. Compression format selection
-   - If multiple formats are available for the chosen resolution and frame rate, prompts user to select
-   - Automatically uses the only available format if there's just one option
-   - Default: MJPEG if available, otherwise the first available format
-   - Common formats: MJPEG (compressed), YUV422 (uncompressed), RGB24, etc.
-5. Output filename
-   - Suggested: `yyyy-MM-dd_HH-mm-ss_WxH@FPS.mkv`
-   - Container: `.mkv`
+The **capture card output format** menu explains the card/driver's delivery choices. UYVY and YUYV both provide uncompressed 4:2:2 video with equivalent picture detail and data size. NV12 provides uncompressed 4:2:0 video: the same brightness detail but less color detail, using about 25% less data at the same resolution and frame rate. Prefer UYVY/YUYV over NV12 for fine colored text and graphics when preserving color detail matters. RGB formats can retain color at every pixel if the source supplies it; compressed formats such as MJPEG depend on the card's compression settings. These input choices are separate from the following **recording mode** menu, which explains pass-through, lossless transcoding, and lossy transcoding.
 
-Recording details:
+| Recording mode | Windows | macOS | File |
+|---|---|---|---|
+| Direct copy | Preserve the stream delivered by DirectShow, including MJPEG | Preserve the stream delivered by AVFoundation, normally uncompressed pixels | MKV for MJPEG/H.264/HEVC; NUT for raw/other streams |
+| Lossless CPU | FFV1 | FFV1 | MKV |
+| Lossy hardware | NVIDIA NVENC H.264/H.265 | Apple VideoToolbox H.264/H.265 | Fragmented MP4 |
+| Lossy CPU | libx264/libx265 | libx264/libx265 | Fragmented MP4 |
 
-- MJPEG input: video is copied without re-encoding using `-c:v copy -fps_mode passthrough`
-- Uncompressed input (e.g., yuyv422): recorded losslessly with FFV1 using `-pix_fmt yuv422p -c:v ffv1 -level 3 -g 1`
-- Press 'q' in the FFmpeg console to stop recording cleanly
-- Files are written to the current working directory
+Direct copy performs no output encoding, scaling, or frame-rate conversion. macOS may decode the card's MJPEG USB stream before exposing frames to FFmpeg; direct copy on macOS does **not** promise preservation of the original USB packets. Raw direct recording can require hundreds of megabytes per second of disk throughput. NUT is an FFmpeg container that preserves raw pixel formats and timestamps; PPTcrunch also accepts `.nut` for later compression.
 
-Note: Capture mode uses Windows DirectShow (`-f dshow`) and requires FFmpeg (downloaded automatically on first run).
+FFV1 preserves received pixels using reversible packing conversions where necessary. It retains chroma sampling, bit depth, and alpha for supported input formats, and keeps full-range MJPEG sample values. Unsupported pixel formats do not offer the lossless option. This means lossless relative to the frames received from the driver, not recovery of information already discarded by the card. It still requires CPU encoding; it is separate from direct copy.
 
-**For PowerPoint files (.pptx)**, the program will:
+Lossy modes ask for H.264/H.265 and a target quality level 0–4. All levels, including Archive (4), remain lossy. Output is 8-bit YUV 4:2:0 at the selected capture resolution and frame rate, using presets intended for live encoding. Hardware and CPU quality numbers are not directly equivalent. Hardware lossless is not offered: VideoToolbox has no equivalent mode, and NVIDIA lossless needs separate format-specific validation. Hardware failures are reported without silently falling back to another recording mode.
 
-1. Create a backup copy of the original file
-2. Extract and compress all videos found in the presentation using your settings
-3. Generate a new file named `presentation-shrunk.pptx`
+Before recording, PPTcrunch captures twelve sample frames to a temporary file, checks the received resolution/format and measured frame rate, and tests the chosen codec and container. These probes can briefly activate the selected camera/card; temporary samples are deleted afterward. The app refuses a detected input-format fallback, unavailable encoder, mismatched filename extension, or an existing destination file. On macOS, grant camera access to the terminal application in System Settings → Privacy & Security → Camera, then retry if the first permission prompt interrupted discovery. No audio is requested.
 
-**For video files**, the program will:
+Choose an output filename or accept the timestamped default. The app displays the stop instructions and waits for **Enter** before starting; **Ctrl+C** cancels at this prompt. During recording, press **q** in the FFmpeg console to finish the file, then wait for the “Recording saved” message before closing the terminal. FFmpeg statistics and buffer/drop warnings stay visible. The app preserves incoming timestamps and disables deliberate frame-rate conversion; it cannot guarantee zero dropped frames if the capture backend, USB connection, encoder, or disk cannot keep up. Test sustained recording with the intended card and storage. The live recording is stopped if FFmpeg reports a fallback to a different input or encoder pixel format.
 
-1. Compress the video file using your selected settings
-2. Generate a new file with quality and codec information in the filename
-3. Example: `video.mov` → `video-L2H264.mp4` (Quality level 2, H.264 codec)
-4. Original file remains unchanged
+macOS capture downloads a separate, pinned Apple-silicon FFmpeg/FFprobe build (`1788701347_N-126416-g9997fd0606`) from the existing Martin Riedl provider, verifies its archive SHA-256 checksums, and caches it under `~/Library/Application Support/PPTcrunch/capture-ffmpeg`. This fixes an AVFoundation mode-selection bug reproduced on the prototype card (1080p30 incorrectly becoming 5 fps) and adds frame-delivery backpressure. The legacy FFmpeg cache used for offline compression is unchanged. Internet access is required once for these capture binaries.
 
-**For wildcard patterns**, the program will:
+Fragmented MP4 writes fragments during capture instead of waiting until recording ends for all playback metadata. If FFmpeg fails, partial output is retained and the exit code is reported.
 
-1. Find all matching files in the current directory
-2. Process each supported file type appropriately
-3. Show a summary of processed files
+Capture regression tests run with the normal test harness. Add `--capture-integration` for synthetic-video tests of packet-copy integrity, FFV1 pixel equality, color/bit-depth preservation, timestamps, video-only output, and CPU lossy encoding. Add `--capture-hardware` to exercise the local platform's hardware encoders. Actual card mode discovery and sustained capture still require connected hardware.
 
 ## Configuration Options
 

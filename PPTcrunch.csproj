@@ -16,6 +16,9 @@
         <PublishTrimmed>false</PublishTrimmed>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
         <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+        <!-- Compressed macOS arm64 bundles intermittently crash in .NET 10 pipe
+             reads with ReadyToRun enabled. Keep the single file uncompressed. -->
+        <EnableCompressionInSingleFile Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">false</EnableCompressionInSingleFile>
         <TrimMode>partial</TrimMode>
 
         <!-- Optional: Performance optimizations -->

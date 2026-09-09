@@ -102,58 +102,18 @@ echo "Checking keychain access..."
 security list-keychains
 security default-keychain
 
-sign_binary() {
-    local apply_runtime="$1"
-    local runtime_flag=()
-
-    if [ "$apply_runtime" = "true" ]; then
-        runtime_flag=(-o runtime)
-        echo "Applying hardened runtime..."
-    else
-        echo "Attempting code signing without hardened runtime..."
-    fi
-
-    local sign_args=(
-        codesign
-        -s "$DEVELOPER_CERTIFICATE_ID"
-        -f
-        -v
-        --timestamp
-    )
-
-    if [ ${#runtime_flag[@]} -gt 0 ]; then
-        sign_args+=("${runtime_flag[@]}")
-    fi
-
-    if [ -f "$ENTITLEMENTS_FILE" ]; then
-        sign_args+=(--entitlements "$ENTITLEMENTS_FILE")
-    fi
-
-    sign_args+=("$BINARY_PATH")
-
-    if ! "${sign_args[@]}" 2>&1; then
-        if [ "$apply_runtime" = "true" ]; then
-            echo "WARNING: Could not apply hardened runtime"
-            return 1
-        fi
-
-        echo "ERROR: Code signing failed"
-        echo "This usually indicates certificate or keychain issues"
-        exit 1
-    fi
-
-    if [ "$apply_runtime" = "true" ]; then
-        echo "Hardened runtime applied successfully"
-    else
-        echo "Code signing without hardened runtime succeeded"
-    fi
-
-    return 0
-}
-
-sign_binary "false"
-if ! sign_binary "true"; then
-    echo "ERROR: Hardened runtime is required for notarization. Fix codesign and retry."
+# Sign once with the final options. A preliminary signature only causes another
+# private-key access and is immediately replaced by the hardened signature.
+echo "Signing executable with hardened runtime..."
+if ! codesign \
+    --sign "$DEVELOPER_CERTIFICATE_ID" \
+    --force \
+    --verbose \
+    --timestamp \
+    --options runtime \
+    --entitlements "$ENTITLEMENTS_FILE" \
+    "$BINARY_PATH"; then
+    echo "ERROR: Code signing with hardened runtime failed. Check the signing identity and Keychain access."
     exit 1
 fi
 

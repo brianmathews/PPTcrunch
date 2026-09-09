@@ -32,6 +32,23 @@ public static class CaptureMode
         throw new IOException("Invalid selection. Run capture again to retry.");
     }
 
+    private static CaptureSourceTiming AskSourceTiming(bool mac)
+    {
+        Console.WriteLine("\nFor smooth motion, match the source FPS or divide it evenly: 60 → 30, 59.94 → 29.97.");
+        Console.WriteLine("60 and 59.94 are different rates; mixing them can cause occasional dropped/repeated frames.");
+        Console.WriteLine("PPTcrunch cannot automatically read the HDMI source rate from this capture connection.");
+        Console.WriteLine("Check the source device's HDMI output/refresh settings. Capture FPS and sample timestamps do not reveal source FPS.");
+        if (mac) Console.WriteLine("If capturing this Mac, check System Settings → Displays → the HDMI display → Refresh rate.");
+        Console.WriteLine("Use the HDMI signal rate, not a movie's FPS when it is playing on a different-rate desktop.");
+        while (true)
+        {
+            Console.Write("Source HDMI FPS (e.g. 60, 59.94, 60000/1001; V for variable/VRR; ENTER if unknown): ");
+            string answer = Console.ReadLine() ?? throw new IOException("Input closed.");
+            try { return CaptureGuidance.ParseSourceTiming(answer); }
+            catch (FormatException ex) { Console.WriteLine(ex.Message); }
+        }
+    }
+
     private static async Task<int> CaptureAsync(bool mac)
     {
         Console.WriteLine("\nUSB Video Capture — video only\n");
@@ -56,14 +73,30 @@ public static class CaptureMode
             : new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_options", "true", "-i", $"video={device.Id}" });
         var formats = CaptureSupport.ParseFormats(queried.Error, mac);
         if (formats.Count == 0) throw new IOException($"Could not discover supported capture modes.\n{queried.Error}");
-        var rates = CaptureSupport.Rates(formats, mac);
-        int defaultRate = Math.Max(0, rates.FindIndex(r => Math.Abs(r - 30) < .001));
-        double rate = rates[Choose("Frame rate", rates.Select(r => $"{CaptureSupport.Number(r)} fps").ToList(), defaultRate)];
-        var atRate = formats.Where(f => CaptureSupport.SupportsRate(f, rate, mac)).ToList();
-        var sizes = atRate.Select(f => (f.Width, f.Height)).Distinct().OrderBy(s => s.Height).ThenBy(s => s.Width).ToList();
+        // Pick resolution first so cadence recommendations cannot select a rate
+        // available only at another resolution (e.g. 1080p120 versus 4K30).
+        var sizes = formats.Select(f => (f.Width, f.Height)).Distinct().OrderBy(s => s.Height).ThenBy(s => s.Width).ToList();
         int defaultSize = Math.Max(0, sizes.FindIndex(s => s.Width == 1920 && s.Height == 1080));
         var size = sizes[Choose("Resolution", sizes.Select(s => $"{s.Width} × {s.Height}").ToList(), defaultSize)];
-        var available = atRate.Where(f => f.Width == size.Width && f.Height == size.Height).ToList();
+        var atSize = formats.Where(f => f.Width == size.Width && f.Height == size.Height).ToList();
+        var sourceTiming = AskSourceTiming(mac);
+        var rateChoices = CaptureGuidance.RateChoices(CaptureSupport.Rates(atSize, mac), sourceTiming);
+        if (sourceTiming.Variable)
+            Console.WriteLine("Variable source timing cannot divide evenly into one fixed capture FPS. Use a fixed source refresh rate when possible.");
+        else if (sourceTiming.Rate != null)
+        {
+            Console.WriteLine($"Recommendations use your source rate of {CaptureGuidance.RateText(sourceTiming.Rate.Value)} fps.");
+            if (!rateChoices.Any(r => r.Cadence is CaptureCadence.Match or CaptureCadence.EvenReduction))
+                Console.WriteLine("No matching rate or even reduction is available at this resolution. Consider another resolution or source refresh rate.");
+            Console.WriteLine("Even ratios reduce cadence judder; they cannot prevent drops caused by timing drift, buffering or an overloaded system.");
+        }
+        Console.WriteLine("Tiny device timing differences are shown as nominal FPS; the exact advertised rate is still requested.");
+        var rateChoice = rateChoices[Choose("Capture frame rate", rateChoices.Select(r => CaptureGuidance.DescribeRate(r, sourceTiming)).ToList(),
+            CaptureGuidance.DefaultRate(rateChoices, sourceTiming))];
+        double rate = rateChoice.Rate;
+        if (rateChoice.Cadence == CaptureCadence.Uneven)
+            Console.WriteLine("Selected rate does not divide/multiply the source evenly; motion may judder.");
+        var available = atSize.Where(f => CaptureSupport.SupportsRate(f, rate, mac)).ToList();
         List<(string Kind, string Format)> colors;
         if (mac)
         {
@@ -76,8 +109,12 @@ public static class CaptureMode
             if (colors.Count == 0 && pixels.Code == 0) colors.Add(("pixel_format", "monob"));
             if (colors.Count == 0) throw new IOException($"Could not discover pixel formats.\n{pixels.Error}");
         }
-        else colors = available.Select(f => (f.Kind, f.Format)).Distinct().OrderBy(f => f.Format != "mjpeg").ToList();
+        else colors = available.Select(f => (f.Kind, f.Format)).Distinct().ToList();
+        colors = CaptureGuidance.SortColors(colors);
         Console.WriteLine("\nChoose the output format to request from the capture card/driver.");
+        Console.WriteLine("Raw formats are ordered by color detail, then bit precision: full-color RGB/4:4:4, 4:2:2, then 4:2:0.");
+        if (colors.Any(c => CaptureGuidance.ColorRank(c.Kind, c.Format).Detail < 0))
+            Console.WriteLine("Compressed or unrecognized formats follow; their picture quality cannot be ranked from the format name alone.");
         if (mac)
         {
             Console.WriteLine("On macOS, these are the formats macOS delivers; it may decode or convert the card's video first.");

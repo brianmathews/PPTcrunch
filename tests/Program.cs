@@ -148,6 +148,7 @@ catch (NotSupportedException) { }
 Console.WriteLine("PASS: encoder quality, compatibility, routing, filenames and PowerPoint guard.");
 await Vp9WorkflowTests.RunAsync();
 CaptureTests.Run();
+CaptureGuidanceTests.Run();
 await CapturePipeTests.RunAsync();
 if (args.Contains("--capture-integration")) await CaptureTests.IntegrationAsync(args.Contains("--capture-hardware"));
 

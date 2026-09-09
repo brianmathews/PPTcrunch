@@ -1,10 +1,93 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json;
 
 namespace PPTcrunch;
 
 public static class CaptureMode
 {
+    public static async Task<int> DiagnoseAsync(string deviceName)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(6, 1))
+        {
+            Console.WriteLine("Capture diagnostics require Windows 7 or later.");
+            return 1;
+        }
+
+        string path = Path.Combine(AppContext.BaseDirectory, "capture-diagnostics.txt");
+        var report = new StringBuilder();
+        report.AppendLine($"PPTcrunch capture diagnostics — {DateTimeOffset.Now:O}");
+        report.AppendLine($"Device requested: {deviceName}");
+        try
+        {
+            var mediaFoundation = WindowsMediaFoundationCapture.Discover();
+            report.AppendLine("\n=== MEDIA FOUNDATION DEVICES AND NATIVE MODES ===");
+            foreach (var source in mediaFoundation)
+            {
+                report.AppendLine($"{source.Name}");
+                report.AppendLine($"  ID: {source.Id}");
+                if (source.Error != null) report.AppendLine($"  ERROR: {source.Error}");
+                foreach (var mode in source.Modes.OrderBy(m => m.Width).ThenBy(m => m.Height)
+                    .ThenBy(m => m.PixelFormat).ThenBy(m => m.Rate))
+                {
+                    report.AppendLine($"  [{mode.NativeIndex}] {mode.Width}x{mode.Height} " +
+                        $"{mode.PixelFormat} {mode.RateNumerator}/{mode.RateDenominator} " +
+                        $"({CaptureSupport.Number(mode.Rate)} fps) subtype={mode.Subtype} stride={mode.Stride}");
+                }
+            }
+            var requested = mediaFoundation.FirstOrDefault(s =>
+                s.Name.Contains(deviceName, StringComparison.OrdinalIgnoreCase));
+            report.AppendLine($"\n=== MEDIA FOUNDATION {deviceName} 1920x1080 AT 30 FPS ===");
+            if (requested == null) report.AppendLine("Device not found.");
+            else foreach (var mode in requested.Modes.Where(m => m.Width == 1920 && m.Height == 1080 && Math.Abs(m.Rate - 30) < .01)
+                .OrderBy(m => m.PixelFormat))
+                report.AppendLine($"{mode.PixelFormat} {mode.RateNumerator}/{mode.RateDenominator} subtype={mode.Subtype}");
+
+            string ffmpeg = await CaptureRuntime.ExecutableAsync();
+            report.AppendLine($"FFmpeg: {ffmpeg}");
+            var listed = await CaptureSupport.Probe(ffmpeg,
+                new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_devices", "true", "-i", "dummy" });
+            report.AppendLine($"\n=== RAW DEVICE LIST (exit {listed.Code}) ===");
+            report.AppendLine(listed.Error.TrimEnd());
+
+            var queried = await CaptureSupport.Probe(ffmpeg,
+                new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_options", "true", "-i", $"video={deviceName}" });
+            report.AppendLine($"\n=== RAW MODE LIST (exit {queried.Code}) ===");
+            report.AppendLine(queried.Error.TrimEnd());
+
+            var formats = CaptureSupport.ParseFormats(queried.Error, false);
+            report.AppendLine($"\n=== PARSED MODES ({formats.Count}) ===");
+            foreach (var format in formats.OrderBy(f => f.Width).ThenBy(f => f.Height)
+                .ThenBy(f => f.Format).ThenBy(f => f.MinRate))
+            {
+                report.AppendLine($"{format.Width}x{format.Height} {format.Kind}={format.Format} " +
+                    $"{CaptureSupport.Number(format.MinRate)}-{CaptureSupport.Number(format.MaxRate)} fps");
+            }
+
+            report.AppendLine("\n=== 1920x1080 AT 30 FPS FILTER ===");
+            foreach (var format in formats.Where(f => f.Width == 1920 && f.Height == 1080)
+                .OrderBy(f => f.Format).ThenBy(f => f.MinRate))
+            {
+                report.AppendLine($"{(CaptureSupport.SupportsRate(format, 30, false) ? "INCLUDED" : "EXCLUDED")} " +
+                    $"{format.Kind}={format.Format} {CaptureSupport.Number(format.MinRate)}-{CaptureSupport.Number(format.MaxRate)} fps");
+            }
+
+            await File.WriteAllTextAsync(path, report.ToString());
+            Console.WriteLine(report);
+            Console.WriteLine($"Diagnostic report saved to:\n{path}");
+            return formats.Count > 0 || requested?.Modes.Count > 0 ? 0 : 1;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            report.AppendLine($"\nDIAGNOSTIC FAILED: {ex}");
+            await File.WriteAllTextAsync(path, report.ToString());
+            Console.WriteLine(report);
+            Console.WriteLine($"Partial diagnostic report saved to:\n{path}");
+            return 1;
+        }
+    }
+
     public static async Task<int> RunAsync()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
@@ -32,70 +115,75 @@ public static class CaptureMode
         throw new IOException("Invalid selection. Run capture again to retry.");
     }
 
-    private static CaptureSourceTiming AskSourceTiming(bool mac)
-    {
-        Console.WriteLine("\nFor smooth motion, match the source FPS or divide it evenly: 60 → 30, 59.94 → 29.97.");
-        Console.WriteLine("60 and 59.94 are different rates; mixing them can cause occasional dropped/repeated frames.");
-        Console.WriteLine("PPTcrunch cannot automatically read the HDMI source rate from this capture connection.");
-        Console.WriteLine("Check the source device's HDMI output/refresh settings. Capture FPS and sample timestamps do not reveal source FPS.");
-        if (mac) Console.WriteLine("If capturing this Mac, check System Settings → Displays → the HDMI display → Refresh rate.");
-        Console.WriteLine("Use the HDMI signal rate, not a movie's FPS when it is playing on a different-rate desktop.");
-        while (true)
-        {
-            Console.Write("Source HDMI FPS (e.g. 60, 59.94, 60000/1001; V for variable/VRR; ENTER if unknown): ");
-            string answer = Console.ReadLine() ?? throw new IOException("Input closed.");
-            try { return CaptureGuidance.ParseSourceTiming(answer); }
-            catch (FormatException ex) { Console.WriteLine(ex.Message); }
-        }
-    }
-
     private static async Task<int> CaptureAsync(bool mac)
     {
         Console.WriteLine("\nUSB Video Capture — video only\n");
+        if (!mac && !OperatingSystem.IsWindowsVersionAtLeast(6, 1))
+            throw new PlatformNotSupportedException("Windows capture requires Windows 7 or later.");
         if (mac) Console.WriteLine("Allow camera access for your terminal when macOS prompts. No microphone access is needed.");
         string ffmpeg = await CaptureRuntime.ExecutableAsync();
         string ffprobe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, mac ? "ffprobe" : "ffprobe.exe");
-        var listed = await CaptureSupport.Probe(ffmpeg, mac
-            ? new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-list_devices", "true", "-i", "" }
-            : new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_devices", "true", "-i", "dummy" });
-        var devices = CaptureSupport.ParseDevices(listed.Error, mac);
-        if (devices.Count == 0) throw new IOException($"No video capture devices found. Connect the card and check camera access.\n{listed.Error}");
-        int defaultDevice = Math.Max(0, devices.FindIndex(d => d.Name.Contains("USB", StringComparison.OrdinalIgnoreCase)));
+        IReadOnlyList<WindowsCaptureSource> windowsSources = Array.Empty<WindowsCaptureSource>();
+        List<CaptureDevice> devices;
+        if (mac)
+        {
+            var listed = await CaptureSupport.Probe(ffmpeg,
+                new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-list_devices", "true", "-i", "" });
+            devices = CaptureSupport.ParseDevices(listed.Error, true);
+            if (devices.Count == 0) throw new IOException($"No video capture devices found. Connect the card and check camera access.\n{listed.Error}");
+        }
+        else
+        {
+            var discovered = await Task.Run(WindowsMediaFoundationCapture.Discover);
+            windowsSources = discovered.Where(source => source.Modes.Count > 0).ToList();
+            devices = windowsSources.Select(source => new CaptureDevice(source.Id, source.Name, true)).ToList();
+            if (devices.Count == 0)
+            {
+                string details = string.Join(Environment.NewLine, discovered.Where(source => source.Error != null)
+                    .Select(source => $"{source.Name}: {source.Error}"));
+                throw new IOException("No accessible video capture devices found. Connect the card and enable " +
+                    "Settings > Privacy & security > Camera > Let desktop apps access your camera." +
+                    (details.Length == 0 ? "" : Environment.NewLine + details));
+            }
+        }
+        int defaultDevice = Math.Max(0, devices.FindIndex(d =>
+            d.Name.Contains("Live Gamer", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("USB", StringComparison.OrdinalIgnoreCase)));
         var device = devices[Choose("Video input", devices.Select(d => d.Name).ToList(), defaultDevice)];
         if (mac && !device.IsUniqueId)
             throw new IOException("The capture runtime did not report a stable video device ID. Refusing to select a camera by an index that may change.");
 
         // AVFoundation has no list_options switch. An intentionally unsupported
         // size makes FFmpeg enumerate AVFoundation's device formats and rate ranges.
-        var queried = await CaptureSupport.Probe(ffmpeg, mac
-            ? new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-video_size", "1x1", "-framerate", "1" }
-                .Concat(CaptureSupport.DeviceInput(device, true)).Concat(new[] { "-frames:v", "1", "-f", "null", "-" })
-            : new[] { "-hide_banner", "-nostdin", "-f", "dshow", "-list_options", "true", "-i", $"video={device.Id}" });
-        var formats = CaptureSupport.ParseFormats(queried.Error, mac);
-        if (formats.Count == 0) throw new IOException($"Could not discover supported capture modes.\n{queried.Error}");
+        List<CaptureFormat> formats;
+        WindowsCaptureSource? windowsSource = null;
+        if (mac)
+        {
+            var queried = await CaptureSupport.Probe(ffmpeg,
+                new[] { "-hide_banner", "-nostdin", "-f", "avfoundation", "-video_size", "1x1", "-framerate", "1" }
+                    .Concat(CaptureSupport.DeviceInput(device, true)).Concat(new[] { "-frames:v", "1", "-f", "null", "-" }));
+            formats = CaptureSupport.ParseFormats(queried.Error, true);
+            if (formats.Count == 0) throw new IOException($"Could not discover supported capture modes.\n{queried.Error}");
+        }
+        else
+        {
+            windowsSource = windowsSources.Single(source => source.Id == device.Id);
+            formats = windowsSource.Modes.Select(mode => new CaptureFormat(mode.Width, mode.Height, mode.Rate, mode.Rate,
+                mode.Kind, mode.PixelFormat)).Distinct().ToList();
+            if (formats.Count == 0) throw new IOException("Media Foundation did not report any supported RGB24, YUY2, NV12, P010, or MJPEG capture modes.");
+        }
         // Pick resolution first so cadence recommendations cannot select a rate
         // available only at another resolution (e.g. 1080p120 versus 4K30).
         var sizes = formats.Select(f => (f.Width, f.Height)).Distinct().OrderBy(s => s.Height).ThenBy(s => s.Width).ToList();
         int defaultSize = Math.Max(0, sizes.FindIndex(s => s.Width == 1920 && s.Height == 1080));
         var size = sizes[Choose("Resolution", sizes.Select(s => $"{s.Width} × {s.Height}").ToList(), defaultSize)];
         var atSize = formats.Where(f => f.Width == size.Width && f.Height == size.Height).ToList();
-        var sourceTiming = AskSourceTiming(mac);
-        var rateChoices = CaptureGuidance.RateChoices(CaptureSupport.Rates(atSize, mac), sourceTiming);
-        if (sourceTiming.Variable)
-            Console.WriteLine("Variable source timing cannot divide evenly into one fixed capture FPS. Use a fixed source refresh rate when possible.");
-        else if (sourceTiming.Rate != null)
-        {
-            Console.WriteLine($"Recommendations use your source rate of {CaptureGuidance.RateText(sourceTiming.Rate.Value)} fps.");
-            if (!rateChoices.Any(r => r.Cadence is CaptureCadence.Match or CaptureCadence.EvenReduction))
-                Console.WriteLine("No matching rate or even reduction is available at this resolution. Consider another resolution or source refresh rate.");
-            Console.WriteLine("Even ratios reduce cadence judder; they cannot prevent drops caused by timing drift, buffering or an overloaded system.");
-        }
+        var supportedRates = CaptureSupport.Rates(atSize, mac);
+        Console.WriteLine($"\nThe capture device reports these allowed FPS rates at {size.Width} × {size.Height}:");
+        foreach (double supportedRate in supportedRates)
+            Console.WriteLine($"  • {CaptureGuidance.RateLabel(supportedRate)}");
         Console.WriteLine("Tiny device timing differences are shown as nominal FPS; the exact advertised rate is still requested.");
-        var rateChoice = rateChoices[Choose("Capture frame rate", rateChoices.Select(r => CaptureGuidance.DescribeRate(r, sourceTiming)).ToList(),
-            CaptureGuidance.DefaultRate(rateChoices, sourceTiming))];
-        double rate = rateChoice.Rate;
-        if (rateChoice.Cadence == CaptureCadence.Uneven)
-            Console.WriteLine("Selected rate does not divide/multiply the source evenly; motion may judder.");
+        double rate = supportedRates[Choose($"Allowed capture frame rate at {size.Width} × {size.Height}",
+            supportedRates.Select(CaptureGuidance.RateLabel).ToList(), CaptureGuidance.DefaultRate(supportedRates))];
         var available = atSize.Where(f => CaptureSupport.SupportsRate(f, rate, mac)).ToList();
         List<(string Kind, string Format)> colors;
         if (mac)
@@ -125,6 +213,9 @@ public static class CaptureMode
         int colorIndex = Choose("Capture card output format", colors.Select(c => CaptureSupport.DescribeFormat(c.Kind, c.Format)).ToList());
         var color = colors[colorIndex];
         var selection = new CaptureSelection(device, size.Width, size.Height, rate, color.Kind, color.Format);
+        WindowsCaptureMode? windowsMode = mac ? null : windowsSource!.Modes.First(mode =>
+            mode.Width == size.Width && mode.Height == size.Height && mode.PixelFormat == color.Format &&
+            Math.Abs(mode.Rate - rate) < .00001);
 
         string temp = Path.Combine(Path.GetTempPath(), "pptcrunch-capture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
@@ -132,15 +223,21 @@ public static class CaptureMode
         {
             Console.WriteLine("\nChecking the selected input with a short video sample...");
             string sample = Path.Combine(temp, "input.nut");
-            var sampled = await CaptureSupport.Probe(ffmpeg, CaptureSupport.Input(selection, mac)
-                .Concat(new[] { "-nostdin", "-map", "0:v:0", "-an", "-frames:v", "12", "-c:v", "copy", "-f", "nut", "-n", sample }), 45);
+            (int Code, string Output, string Error, double? CaptureRate) sampled;
+            if (mac)
+            {
+                var probe = await CaptureSupport.Probe(ffmpeg, CaptureSupport.Input(selection, true)
+                    .Concat(new[] { "-nostdin", "-map", "0:v:0", "-an", "-frames:v", "12", "-c:v", "copy", "-f", "nut", "-n", sample }), 45);
+                sampled = (probe.Code, probe.Output, probe.Error, null);
+            }
+            else sampled = await CaptureWindowsSample(ffmpeg, device.Id, windowsMode!, sample);
             if (sampled.Code != 0 || HasModeFallback(sampled.Error))
                 throw new IOException($"The requested input mode could not be used exactly.\n{sampled.Error}");
             var inspected = await CaptureSupport.Probe(ffprobe, new[] { "-v", "error", "-select_streams", "v:0", "-show_entries",
                 "stream=codec_name,pix_fmt,width,height:packet=pts_time", "-show_packets", "-of", "json", sample });
             if (inspected.Code != 0) throw new IOException(inspected.Error);
             var stream = ReadStream(inspected.Output);
-            double measuredRate = SampleRate(inspected.Output);
+            double measuredRate = sampled.CaptureRate ?? SampleRate(inspected.Output);
             if (Math.Abs(measuredRate / rate - 1) > .15)
                 throw new IOException($"Device delivered about {measuredRate:F2} fps instead of {CaptureSupport.Number(rate)} fps. Choose another mode or check the signal.");
             if (stream.Width != size.Width || stream.Height != size.Height)
@@ -239,6 +336,8 @@ public static class CaptureMode
             Console.Write("\nPress ENTER to start recording, or Ctrl+C to cancel: ");
             if (Console.ReadLine() == null) throw new IOException("Input closed before recording started.");
             Console.WriteLine("\nStarting recording...");
+            if (!mac)
+                return await RecordWindows(ffmpeg, device.Id, windowsMode!, outputOptions, path);
             var arguments = CaptureSupport.Input(selection, mac).Concat(outputOptions).Concat(new[] { "-stats", "-n", path }).ToList();
             var info = CaptureSupport.StartInfo(ffmpeg, arguments, false);
             info.RedirectStandardError = true;
@@ -267,6 +366,99 @@ public static class CaptureMode
             return modeChanged ? 1 : proc.ExitCode;
         }
         finally { Directory.Delete(temp, recursive: true); }
+    }
+
+    [SupportedOSPlatform("windows6.1")]
+    private static async Task<(int Code, string Output, string Error, double? CaptureRate)> CaptureWindowsSample(
+        string ffmpeg, string sourceId, WindowsCaptureMode mode, string sample)
+    {
+        var arguments = WindowsMediaFoundationCapture.FfmpegInput(mode)
+            .Concat(new[] { "-map", "0:v:0", "-an", "-frames:v", "12", "-c:v", "copy", "-f", "nut", "-n", sample });
+        var info = CaptureSupport.StartInfo(ffmpeg, arguments, true);
+        info.RedirectStandardInput = true;
+        using var process = Process.Start(info) ?? throw new IOException("Could not start FFmpeg for the capture sample.");
+        Task<string> output = CaptureSupport.ReadOutput(process.StandardOutput);
+        Task<string> error = CaptureSupport.ReadOutput(process.StandardError);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try
+        {
+            WindowsCaptureResult captured;
+            try
+            {
+                captured = await WindowsMediaFoundationCapture.WriteFramesAsync(sourceId, mode,
+                    process.StandardInput.BaseStream, 12, timeout.Token);
+            }
+            finally { process.StandardInput.Close(); }
+            await process.WaitForExitAsync(timeout.Token);
+            await Task.WhenAll(output, error);
+            return (process.ExitCode, await output, await error,
+                captured.MeasuredRate > 0 ? captured.MeasuredRate : null);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(output, error);
+            throw new IOException($"Capture sample timed out. Check the video signal and camera permission, then retry.\n{await error}");
+        }
+        catch
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            await Task.WhenAll(output, error);
+            throw;
+        }
+    }
+
+    [SupportedOSPlatform("windows6.1")]
+    private static async Task<int> RecordWindows(string ffmpeg, string sourceId, WindowsCaptureMode mode,
+        IReadOnlyList<string> outputOptions, string path)
+    {
+        var arguments = WindowsMediaFoundationCapture.FfmpegInput(mode).Concat(outputOptions)
+            .Concat(new[] { "-stats", "-n", path });
+        var info = CaptureSupport.StartInfo(ffmpeg, arguments, false);
+        info.RedirectStandardInput = true;
+        info.RedirectStandardError = true;
+        using var process = Process.Start(info) ?? throw new IOException("Could not start recording.");
+        var diagnostics = CaptureSupport.ReadLines(process.StandardError, Console.Error.WriteLine);
+        using var stop = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancel = (_, e) => { e.Cancel = true; stop.Cancel(); };
+        Console.CancelKeyPress += cancel;
+        Exception? captureFailure = null;
+        WindowsCaptureResult? captured = null;
+        try
+        {
+            Task<WindowsCaptureResult> capture = WindowsMediaFoundationCapture.WriteFramesAsync(sourceId, mode,
+                process.StandardInput.BaseStream, null, stop.Token);
+            while (!capture.IsCompleted && !process.HasExited)
+            {
+                if (Console.KeyAvailable && char.ToLowerInvariant(Console.ReadKey(intercept: true).KeyChar) == 'q')
+                    stop.Cancel();
+                await Task.Delay(50);
+            }
+            if (process.HasExited) stop.Cancel();
+            try { captured = await capture; }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { captureFailure = ex; }
+            finally { process.StandardInput.Close(); }
+            if (captureFailure != null && !process.HasExited) process.Kill(entireProcessTree: true);
+            await Task.WhenAll(process.WaitForExitAsync(), diagnostics);
+        }
+        finally { Console.CancelKeyPress -= cancel; }
+
+        if (captureFailure != null)
+        {
+            Console.WriteLine($"Recording stopped because Media Foundation capture failed: {captureFailure.Message}");
+            Console.WriteLine($"Any partial recording has been retained at {path}.");
+            return 1;
+        }
+        if (process.ExitCode != 0)
+        {
+            Console.WriteLine($"FFmpeg exited with code {process.ExitCode}. Any partial recording has been retained at {path}.");
+            return process.ExitCode;
+        }
+        Console.WriteLine($"Recording saved: {path}");
+        if (captured != null) Console.WriteLine($"Captured {captured.Frames} frames; measured device cadence {captured.MeasuredRate:F3} fps.");
+        return 0;
     }
 
     internal static bool HasModeFallback(string log) =>

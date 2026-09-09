@@ -3,10 +3,6 @@ using System.Text.RegularExpressions;
 
 namespace PPTcrunch;
 
-internal enum CaptureCadence { Match, EvenReduction, EvenRepeat, Uneven, Unknown }
-internal record CaptureSourceTiming(double? Rate, bool Variable = false);
-internal record CaptureRateChoice(double Rate, CaptureCadence Cadence, int Factor);
-
 internal static class CaptureGuidance
 {
     // UVC frame intervals are quantized. Ignore a few ppm without conflating
@@ -30,63 +26,22 @@ internal static class CaptureGuidance
             ? nominal.ToString("0.###", CultureInfo.InvariantCulture) : CaptureSupport.Number(rate);
     }
 
-    internal static CaptureSourceTiming ParseSourceTiming(string text)
+    internal static string RateLabel(double rate)
     {
-        text = text.Trim();
-        if (text.Length == 0) return new(null);
-        if (text.Equals("v", StringComparison.OrdinalIgnoreCase) || text.Equals("vrr", StringComparison.OrdinalIgnoreCase))
-            return new(null, true);
-        var parts = text.Split('/');
-        if (parts.Length > 2 || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double rate))
-            throw new FormatException("Enter a positive FPS value such as 60, 59.94 or 60000/1001; V for variable; or ENTER if unknown.");
-        if (parts.Length == 2)
-        {
-            if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double denominator) || denominator <= 0)
-                throw new FormatException("The frame-rate denominator must be positive.");
-            rate /= denominator;
-        }
-        if (!double.IsFinite(rate) || rate <= 0 || rate > 1000)
-            throw new FormatException("Source FPS must be greater than 0 and at most 1000.");
-        return new(NominalRate(rate));
+        string label = RateText(rate) + " fps";
+        string reported = CaptureSupport.Number(rate) + " fps";
+        return label == reported ? label : $"{label} (device reports {CaptureSupport.Number(rate)})";
     }
 
-    internal static CaptureRateChoice Classify(double capture, CaptureSourceTiming source)
+    internal static int DefaultRate(IReadOnlyList<double> rates)
     {
-        if (source.Rate is not double sourceRate || source.Variable) return new(capture, CaptureCadence.Unknown, 0);
-        double from = NominalRate(sourceRate), to = NominalRate(capture);
-        if (Math.Abs(from / to - 1) <= TimingTolerance) return new(capture, CaptureCadence.Match, 1);
-        double ratio = Math.Max(from, to) / Math.Min(from, to);
-        int factor = (int)Math.Round(ratio);
-        if (factor >= 2 && Math.Abs(ratio / factor - 1) <= TimingTolerance)
-            return new(capture, from > to ? CaptureCadence.EvenReduction : CaptureCadence.EvenRepeat, factor);
-        return new(capture, CaptureCadence.Uneven, 0);
-    }
-
-    internal static List<CaptureRateChoice> RateChoices(IEnumerable<double> rates, CaptureSourceTiming source) => rates
-        .Select(r => Classify(r, source)).OrderBy(r => r.Cadence).ThenByDescending(r => r.Rate).ToList();
-
-    internal static int DefaultRate(IReadOnlyList<CaptureRateChoice> choices, CaptureSourceTiming source)
-    {
-        // Exact match first, otherwise the highest even reduction. Multiples above
-        // the source add no motion detail, so prefer them only when no divisor exists.
-        if (choices[0].Cadence is CaptureCadence.Match or CaptureCadence.EvenReduction or CaptureCadence.EvenRepeat) return 0;
-        double target = source.Rate ?? 30;
-        return Enumerable.Range(0, choices.Count).MinBy(i => Math.Abs(NominalRate(choices[i].Rate) - target));
-    }
-
-    internal static string DescribeRate(CaptureRateChoice choice, CaptureSourceTiming source)
-    {
-        string rate = RateText(choice.Rate) + " fps";
-        if (rate != CaptureSupport.Number(choice.Rate) + " fps")
-            rate += $" (device reports {CaptureSupport.Number(choice.Rate)})";
-        return rate + " — " + (choice.Cadence switch
-        {
-            CaptureCadence.Match => "recommended: matches the source rate",
-            CaptureCadence.EvenReduction => $"recommended reduction: 1 frame per {choice.Factor} source frames",
-            CaptureCadence.EvenRepeat => $"even repeats: {choice.Factor} output frames per source frame; no extra motion detail",
-            CaptureCadence.Uneven => "uneven cadence: periodic frame drops/repeats may cause judder",
-            _ => source.Variable ? "variable source: no fixed-rate cadence guarantee" : "source rate unknown"
-        });
+        if (rates.Count == 0) throw new ArgumentException("At least one capture rate is required.", nameof(rates));
+        for (int i = 0; i < rates.Count; i++)
+            if (NominalRate(rates[i]) == 30) return i;
+        double ntsc30 = 30000.0 / 1001;
+        for (int i = 0; i < rates.Count; i++)
+            if (NominalRate(rates[i]) == ntsc30) return i;
+        return Enumerable.Range(0, rates.Count).MinBy(i => Math.Abs(NominalRate(rates[i]) - 30));
     }
 
     // Prioritize spatial color detail, then precision. These are representation

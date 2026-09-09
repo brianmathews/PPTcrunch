@@ -23,48 +23,19 @@ internal static class CaptureGuidanceTests
               CaptureGuidance.ColorRank("pixel_format", "rgba64le").Precision == 48, "16-bit color retained in ranking");
         Check(CaptureGuidance.ColorRank("pixel_format", "unknown").Detail == -1, "unknown quality is not guessed");
 
-        var sixty = CaptureGuidance.ParseSourceTiming("60");
-        var ntsc = CaptureGuidance.ParseSourceTiming("60000/1001");
-        Check(CaptureGuidance.ParseSourceTiming("59.94") == ntsc, "decimal NTSC input agrees with exact fraction");
-        foreach (string invalid in new[] { "0", "-60", "NaN", "Infinity", "60/0", "60/-1", "abc", "60/1/1", "1001" })
-        {
-            bool rejected = false;
-            try { CaptureGuidance.ParseSourceTiming(invalid); }
-            catch (FormatException) { rejected = true; }
-            Check(rejected, "reject invalid source rate: " + invalid);
-        }
-        Check(CaptureGuidance.Classify(30.00003, sixty) is { Cadence: CaptureCadence.EvenReduction, Factor: 2 }, "60 to quantized 30 is even");
-        Check(CaptureGuidance.Classify(29.97, ntsc) is { Cadence: CaptureCadence.EvenReduction, Factor: 2 }, "59.94 to 29.97 is even");
-        Check(CaptureGuidance.Classify(29.97, sixty).Cadence == CaptureCadence.Uneven, "60 to 29.97 must warn");
-        Check(CaptureGuidance.Classify(30.00003, ntsc).Cadence == CaptureCadence.Uneven, "59.94 to 30 must warn");
-        Check(CaptureGuidance.Classify(24, sixty).Cadence == CaptureCadence.Uneven, "60 to 24 has uneven drop cadence");
-        Check(CaptureGuidance.Classify(60, CaptureGuidance.ParseSourceTiming("24")).Cadence == CaptureCadence.Uneven, "24 to 60 has uneven repeat cadence");
-        Check(CaptureGuidance.Classify(120.00048, CaptureGuidance.ParseSourceTiming("24")) is { Cadence: CaptureCadence.EvenRepeat, Factor: 5 }, "24 to 120 is even repeats");
-        Check(CaptureGuidance.Classify(25, CaptureGuidance.ParseSourceTiming("50")) is { Cadence: CaptureCadence.EvenReduction, Factor: 2 }, "50 to 25 is even");
-        Check(CaptureGuidance.Classify(48, CaptureGuidance.ParseSourceTiming("144")) is { Cadence: CaptureCadence.EvenReduction, Factor: 3 }, "non-power-of-two reduction is even");
-        Check(CaptureGuidance.Classify(30.003, sixty).Cadence == CaptureCadence.Uneven, "tolerance does not hide larger timing mismatches");
         Check(CaptureGuidance.RateText(30.00003) == "30" && CaptureGuidance.RateText(59.94018) == "59.94", "friendly labels remove device quantization noise");
+        Check(CaptureGuidance.RateLabel(60.00024) == "60 fps (device reports 60.00024)",
+            "supported-rate list preserves the device's exact advertised timing");
 
         double[] rates = { 120.00048, 60.00024, 59.94018, 50, 30.00003, 29.97 };
-        var choices = CaptureGuidance.RateChoices(rates, sixty);
-        Check(choices[0].Rate == 60.00024 && choices[1].Rate == 30.00003 && choices[2].Rate == 120.00048,
-            "source match, even reduction, and even repeats are preferred in that order");
-        Check(CaptureGuidance.DefaultRate(choices, sixty) == 0, "default matches source when available");
-        var fourK = CaptureGuidance.RateChoices(new[] { 30.00003, 29.97 }, ntsc);
-        Check(fourK[0].Rate == 29.97 && fourK[0].Cadence == CaptureCadence.EvenReduction,
-            "4K recommendation uses only rates available at 4K and distinguishes NTSC");
-        var noEvenRate = CaptureGuidance.RateChoices(new[] { 25.0, 30.0 }, CaptureGuidance.ParseSourceTiming("24"));
-        Check(noEvenRate.All(c => c.Cadence == CaptureCadence.Uneven), "no false recommendation when nothing divides evenly");
-        var unknown = CaptureGuidance.ParseSourceTiming("");
-        var unknownChoices = CaptureGuidance.RateChoices(rates, unknown);
-        Check(unknownChoices.All(c => c.Cadence == CaptureCadence.Unknown) &&
-              unknownChoices[CaptureGuidance.DefaultRate(unknownChoices, unknown)].Rate == 30.00003, "unknown source keeps neutral 30 fps default");
-        var variable = CaptureGuidance.ParseSourceTiming("VRR");
-        Check(variable.Variable && CaptureGuidance.RateChoices(rates, variable).All(c => c.Cadence == CaptureCadence.Unknown), "VRR never claims fixed cadence");
-        Check(CaptureGuidance.DescribeRate(choices[0], sixty).Contains("60.00024"), "labels retain exact device timing for review");
-        var mode = new CaptureSelection(new("test", "test", true), 1920, 1080, choices[0].Rate, "pixel_format", "0rgb");
+        Check(rates[CaptureGuidance.DefaultRate(rates)] == 30.00003, "30 fps is the default when supported");
+        double[] ntscOnly = { 120, 59.94, 29.97, 24 };
+        Check(ntscOnly[CaptureGuidance.DefaultRate(ntscOnly)] == 29.97, "29.97 fps is the fallback default when 30 is unavailable");
+        double[] noThirty = { 60, 25, 24 };
+        Check(noThirty[CaptureGuidance.DefaultRate(noThirty)] == 25, "the closest available rate to 30 is the final fallback");
+        var mode = new CaptureSelection(new("test", "test", true), 1920, 1080, rates[0], "pixel_format", "0rgb");
         var input = CaptureSupport.Input(mode, true);
-        Check(input[input.IndexOf("-framerate") + 1] == "60.00024", "nominal matching never changes the actual device request");
-        Console.WriteLine("PASS: capture color ordering, source-rate parsing, cadence recommendations, NTSC separation and device timing preservation.");
+        Check(input[input.IndexOf("-framerate") + 1] == "120.00048", "nominal display labels never change the actual device request");
+        Console.WriteLine("PASS: capture color ordering, 30/29.97 default selection, and device timing preservation.");
     }
 }

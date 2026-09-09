@@ -26,6 +26,12 @@ class Program
             return await CaptureMode.RunAsync();
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "capture", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "--diagnose", StringComparison.OrdinalIgnoreCase))
+        {
+            return await CaptureMode.DiagnoseAsync("Live Gamer Ultra 2.1-Video");
+        }
+
         if (args.Length != 1)
         {
             ShowUsage();
@@ -417,6 +423,7 @@ class Program
         Console.WriteLine("Usage:");
         Console.WriteLine("  PPTcrunch <file-pattern>");
         Console.WriteLine("  PPTcrunch capture");
+        Console.WriteLine("  PPTcrunch capture --diagnose      # Save the capture card's raw Windows mode report");
         Console.WriteLine("  PPTcrunch --version                 # Print release version and build number");
         Console.WriteLine();
         Console.WriteLine("Supported file types:");

@@ -61,6 +61,30 @@ internal static class CaptureTests
         Check(pixels.SequenceEqual(new[] { "uyvy422", "nv12", "0rgb", "bgr0" }), "pixel list retains digit-leading formats and later entries, and excludes diagnostics");
         Check(CaptureSupport.DescribeFormat("pixel_format", "0rgb").Contains("padding byte") &&
               CaptureSupport.DescribeFormat("pixel_format", "bgr0").Contains("cannot restore"), "padded RGB descriptions explain storage and conversion limitations");
+        Check(CaptureSupport.DescribeFormat("pixel_format", "p010le").Contains("10-bit"), "P010 precision is explained");
+        Check(CaptureSupport.DescribeFormat("pixel_format", "bgr24").StartsWith("RGB24"),
+            "Media Foundation's BGR byte layout is presented to users as the card's RGB24 mode");
+        Check(WindowsMediaFoundationCapture.PixelFormat(new Guid("e436eb7d-524f-11ce-9f53-0020af0ba770")) == "bgr24",
+            "bridged DirectShow RGB24 memory order maps to FFmpeg BGR24");
+        Check(WindowsMediaFoundationCapture.PixelFormat(new Guid("00000014-0000-0010-8000-00aa00389b71")) == "bgr24",
+            "Media Foundation RGB24 memory order maps to FFmpeg BGR24");
+        Check(WindowsMediaFoundationCapture.PixelFormat(new Guid("30313050-0000-0010-8000-00aa00389b71")) == "p010le",
+            "Media Foundation P010 maps to FFmpeg's little-endian format");
+        var mfMode = new WindowsCaptureMode(7, 1920, 1080, 30000, 1001,
+            new Guid("e436eb7d-524f-11ce-9f53-0020af0ba770"), "bgr24", -5760);
+        var mfInput = WindowsMediaFoundationCapture.FfmpegInput(mfMode);
+        Check(mfInput.Contains("rawvideo") && mfInput.Contains("bgr24") && mfInput.Contains("30000/1001") && mfInput.Last() == "pipe:0" &&
+              !mfInput.Contains("-use_wallclock_as_timestamps"),
+            "Media Foundation raw frames use sequential timestamps at the exact device rate");
+        Check(Math.Abs(new WindowsCaptureResult(3, new long[] { 0, 333667, 667334 }).MeasuredRate - 30000.0 / 1001) < .001,
+            "Media Foundation timestamps measure fractional cadence");
+        using (var normalized = new MemoryStream())
+        {
+            WindowsMediaFoundationCapture.WriteBgr24(normalized,
+                new byte[] { 7, 8, 9, 10, 11, 12, 0, 0, 1, 2, 3, 4, 5, 6, 0, 0 }, 2, 2, -8);
+            Check(normalized.ToArray().SequenceEqual(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }),
+                "bottom-up RGB24 is emitted top-down without row padding");
+        }
         Check(CaptureMode.HasModeFallback("Overriding selected pixel format to use nv12 instead."), "fallback rejected");
         Check(Math.Abs(CaptureMode.SampleRate("""{"packets":[{"pts_time":"1.0"},{"pts_time":"1.2"},{"pts_time":"1.4"}]}""") - 5) < .001, "actual sample cadence detects 5fps fallback");
         var mode = new CaptureSelection(new("USB \"HDMI\"", "test"), 1920, 1080, 29.97, "pixel_format", "yuyv422");

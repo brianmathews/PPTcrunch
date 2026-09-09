@@ -6,19 +6,25 @@ echo ========================================
 echo  PPTcrunch - Windows Release Publisher
 echo ========================================
 echo.
-echo Building self-contained single file executable with embedded FFmpeg...
-echo Target: Windows x64 (no .NET runtime or FFmpeg installation required)
+echo Building self-contained single file executable with automatic FFmpeg setup...
+echo Target: Windows x64 (no .NET runtime or manual FFmpeg installation required)
 echo.
 
-REM Clean and build
+REM Allocate the next build number.
 dotnet msbuild increment-build.proj -t:IncrementBuildNumber -nologo
-if errorlevel 1 exit /b 1
-dotnet clean --configuration Release >nul 2>&1
-if errorlevel 1 exit /b 1
-dotnet publish PPTcrunch.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
-if errorlevel 1 exit /b 1
+if errorlevel 1 goto :failed
+
+REM Restore only the Windows runtime. The project also supports macOS, and an
+REM unrestricted restore tries to download both runtime packs.
+dotnet restore PPTcrunch.csproj -r win-x64 -p:RuntimeIdentifiers=win-x64
+if errorlevel 1 goto :failed
+
+REM Publish from the Windows-specific restore completed above.
+dotnet publish PPTcrunch.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:RuntimeIdentifiers=win-x64 --no-restore -o publish
+if errorlevel 1 goto :failed
+
 publish\pptcrunch.exe --version
-if errorlevel 1 exit /b 1
+if errorlevel 1 goto :failed
 
 echo.
 echo Checking build results...
@@ -34,8 +40,8 @@ if exist publish\pptcrunch.exe (
     echo publish\pptcrunch.exe
     echo.
     echo [OK] Single-file deployment ready
-    echo [OK] No external dependencies required  
-    echo [OK] Embedded FFmpeg included - no external installation needed
+    echo [OK] .NET runtime included
+    echo [OK] Standard FFmpeg is downloaded and cached automatically when needed
     echo [OK] Auto-detects NVIDIA GPU capabilities
     echo [OK] Self-contained includes .NET 10 runtime
     echo.
@@ -45,13 +51,27 @@ if exist publish\pptcrunch.exe (
     dir /b publish\
     echo.
 ) else (
-    echo ========================================
-    echo  Build failed!
-    echo ========================================
-    echo.
     echo Expected executable not found.
-    echo Please check the error messages above.
-    echo.
+    goto :failed_missing_output
 )
 
 pause
+exit /b 0
+
+:failed_missing_output
+set "publishExitCode=1"
+goto :failed_message
+
+:failed
+set "publishExitCode=%errorlevel%"
+
+:failed_message
+echo.
+echo ========================================
+echo  Build failed with exit code %publishExitCode%!
+echo ========================================
+echo.
+echo Review the error messages above, then press any key to close this window.
+echo.
+pause
+exit /b %publishExitCode%
